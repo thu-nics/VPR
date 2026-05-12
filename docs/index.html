@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPR: Verifiable Process Rewards for Agentic Reasoning</title>
+    <meta name="description" content="Verifiable Process Rewards converts symbolic and algorithmic oracles into dense turn-level rewards for long-horizon agentic reasoning.">
+    <link rel="stylesheet" href="static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+</head>
+
+<body>
+    <nav class="nav-global" id="navGlobal">
+        <div class="nav-global-content">
+            <div class="nav-global-links">
+                <a href="https://vs-bench.github.io/" target="_blank">VS-Bench</a>
+                <a href="https://thu-nics.github.io/MARSHAL/" target="_blank">MARSHAL</a>
+                <a href="#" class="active" onclick="window.scrollTo({top:0,behavior:'smooth'}); return false;">VPR</a>
+                <a href="https://wideseek-r1.github.io/" target="_blank">WideSeek-R1</a>
+            </div>
+        </div>
+    </nav>
+
+    <nav class="nav-sticky-bar" id="navStickyBar">
+        <div class="nav-sticky-content">
+            <div class="nav-title-wrapper">
+                <a class="nav-sticky-title" href="#">VPR <i class="fas fa-chevron-down nav-title-chevron"></i></a>
+                <div class="nav-dropdown">
+                    <div class="nav-dropdown-header">Explore Projects</div>
+                    <a class="nav-project-card" href="https://vs-bench.github.io/" target="_blank">
+                        <div class="nav-project-card-header">
+                            <div class="nav-project-card-title">VS-Bench</div>
+                            <div class="nav-project-card-venue">CVPR 2026 Oral</div>
+                        </div>
+                        <div class="nav-project-card-desc">Evaluating VLMs for strategic abilities in multi-agent environments.</div>
+                    </a>
+                    <a class="nav-project-card" href="https://thu-nics.github.io/MARSHAL/" target="_blank">
+                        <div class="nav-project-card-header">
+                            <div class="nav-project-card-title">MARSHAL</div>
+                            <div class="nav-project-card-venue">ICLR 2026</div>
+                        </div>
+                        <div class="nav-project-card-desc">Incentivizing multi-agent reasoning via self-play with strategic LLMs.</div>
+                    </a>
+                    <a class="nav-project-card" href="#" onclick="window.scrollTo({top:0,behavior:'smooth'}); return false;">
+                        <div class="nav-project-card-header">
+                            <div class="nav-project-card-title active-project">VPR</div>
+                            <div class="nav-project-card-venue">NeurIPS 2026</div>
+                        </div>
+                        <div class="nav-project-card-desc">Verifiable process rewards for long-horizon agentic reasoning.</div>
+                    </a>
+                    <a class="nav-project-card" href="https://wideseek-r1.github.io/" target="_blank">
+                        <div class="nav-project-card-title">WideSeek-R1</div>
+                        <div class="nav-project-card-desc">Exploring width scaling for broad information seeking via multi-agent reinforcement learning.</div>
+                    </a>
+                </div>
+            </div>
+            <div class="nav-sticky-links" id="navStickyLinks">
+                <a href="#overview">Overview</a>
+                <a href="#method">Method</a>
+                <a href="#results">Results</a>
+                <a href="#analysis">Analysis</a>
+                <a href="#resources">Resources</a>
+                <a href="#bibtex">BibTeX</a>
+            </div>
+            <button class="nav-mobile-toggle" id="navMobileToggle" aria-label="Toggle navigation">
+                <i class="fas fa-bars"></i>
+            </button>
+        </div>
+    </nav>
+
+    <header>
+        <div class="container hero-content">
+            <div class="paper-status-badge">NeurIPS 2026</div>
+            <h1>Verifiable Process Rewards <span>for Agentic Reasoning</span></h1>
+            <p class="hero-lead">
+                VPR turns symbolic and algorithmic oracles into dense turn-level rewards, giving LLM agents reliable
+                process supervision for long-horizon reasoning instead of waiting for sparse final outcomes.
+            </p>
+            <div class="authors">
+                <p>
+                    Huining Yuan<sup>*</sup>, <a href="https://zelaix.github.io/" target="_blank">Zelai Xu</a><sup>*</sup>, Huaijie Wang,
+                    Xiangmin Yi, Jiaxuan Gao,<br>
+                    <a href="https://sites.google.com/view/xiaopingzhang" target="_blank">Xiao-Ping Zhang</a>,
+                    <a href="https://nicsefc.ee.tsinghua.edu.cn/people/YuWang" target="_blank">Yu Wang</a><sup>&dagger;</sup>,
+                    <a href="https://nicsefc.ee.tsinghua.edu.cn/people/ChaoYu" target="_blank">Chao Yu</a><sup>&dagger;</sup>,
+                    Yi Wu<sup>&dagger;</sup>
+                </p>
+                <p class="affiliations">Tsinghua University</p>
+                <p class="affiliations"><sup>*</sup>Equal contribution. <sup>&dagger;</sup>Corresponding authors.</p>
+            </div>
+            <div class="links">
+                <a href="https://arxiv.org/abs/2605.10325" class="btn" target="_blank"><i class="fas fa-file-pdf"></i> Paper</a>
+                <a href="https://github.com/thu-nics/VPR" class="btn" target="_blank"><i class="fab fa-github"></i> Code</a>
+                <a href="https://huggingface.co/collections/nics-efc/vpr" class="btn" target="_blank"><img src="static/images/hf-logo.png" alt="HF" class="btn-icon"> Models</a>
+            </div>
+        </div>
+        <div class="container header-image-container">
+            <img src="static/images/overview.png" alt="VPR compares outcome rewards, rollout-based process rewards, and verifiable process rewards." class="header-image">
+        </div>
+    </header>
+
+    <main class="container">
+        <section id="overview">
+            <h2>Overview</h2>
+            <div class="overview-content">
+                <div class="overview-text">
+                    <p>
+                        Reinforcement learning from verifiable rewards has become a powerful way to improve LLM
+                        reasoning, but most methods only reward final success. In long-horizon agentic tasks, this
+                        creates a credit assignment problem: a trajectory may fail after many correct steps, or succeed
+                        despite flawed intermediate decisions.
+                    </p>
+                    <p>
+                        <strong>Verifiable Process Rewards (VPR)</strong> studies densely-verifiable agentic reasoning
+                        problems, where each intermediate action can be checked by a task-specific oracle. Instead of
+                        learning a noisy process reward model or estimating step values through extra rollouts, VPR uses
+                        task structure itself to provide reliable turn-level supervision.
+                    </p>
+                    <div class="key-points">
+                        <div>
+                            <span class="stat">Dense</span>
+                            <p>Every turn receives local feedback from a symbolic or algorithmic verifier.</p>
+                        </div>
+                        <div>
+                            <span class="stat">Grounded</span>
+                            <p>Rewards come from task logic, not learned judges or subjective preferences.</p>
+                        </div>
+                        <div>
+                            <span class="stat">Transferable</span>
+                            <p>VPR-trained agents improve on general and agentic reasoning benchmarks.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="overview-image">
+                    <img src="static/images/teaser.png" alt="Minesweeper trajectory comparison between outcome reward and VPR.">
+                    <p class="caption">VPR scores intermediate decisions against a posterior verifier, so hazardous reveals and correct flags receive immediate credit signals.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="method">
+            <h2>Method</h2>
+            <p>
+                VPR focuses on agentic reasoning settings where a verifier
+                <span class="math">V(s<sub>t</sub>, a<sub>t</sub>)</span> can check whether the current action is valid,
+                useful, or optimal under the environment structure. This converts sparse trajectory-level feedback into
+                dense process rewards:
+            </p>
+            <div class="formula">r<sub>t</sub><sup>VPR</sup> = V(s<sub>t</sub>, a<sub>t</sub>)</div>
+
+            <div class="method-image">
+                <img src="static/images/vpr.png" alt="Three VPR instantiations in Tic-Tac-Toe, Sudoku, and Minesweeper.">
+                <p class="caption">Three VPR instantiations: search-based verification, constraint-based verification, and posterior-based verification.</p>
+            </div>
+
+            <div class="cards three-col">
+                <article class="card">
+                    <h3>Search-Based VPR</h3>
+                    <p><strong>Tic-Tac-Toe.</strong> MCTS lookahead identifies strategically optimal moves, rewarding actions with the highest estimated value.</p>
+                </article>
+                <article class="card">
+                    <h3>Constraint-Based VPR</h3>
+                    <p><strong>Sudoku.</strong> A constraint oracle verifies whether a filled digit is consistent with the unique solution.</p>
+                </article>
+                <article class="card">
+                    <h3>Posterior-Based VPR</h3>
+                    <p><strong>Minesweeper.</strong> Posterior mine probabilities verify safe reveals and certain mine flags under partial observability.</p>
+                </article>
+            </div>
+
+            <h3>Turn-Level Optimization</h3>
+            <p>
+                During training, VPR uses a turn-level GRPO-style objective. Multiple trajectories are sampled for each
+                update, verifier rewards are normalized by turn across active trajectories, and the resulting advantages
+                are used in a clipped policy optimization objective. Correct intermediate decisions can therefore be
+                reinforced even if a later step fails, while invalid decisions can be penalized even if the trajectory
+                succeeds by chance.
+            </p>
+        </section>
+
+        <section id="results">
+            <h2>Main Results</h2>
+            <p>
+                Experiments use Qwen3-4B with thinking mode enabled. Across the three densely-verifiable training
+                environments, VPR consistently outperforms outcome-level reward and Monte Carlo process-reward baselines.
+            </p>
+
+            <div class="method-image">
+                <img src="static/images/eval_curve.png" alt="Evaluation curves over VPR training.">
+                <p class="caption">Evaluation curves over GRPO training show that dense verifiable feedback improves sample efficiency and final policy quality.</p>
+            </div>
+
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th rowspan="2">Method</th>
+                            <th colspan="2">Tic-Tac-Toe</th>
+                            <th colspan="2">Sudoku</th>
+                            <th colspan="2">Minesweeper</th>
+                        </tr>
+                        <tr>
+                            <th>1st</th>
+                            <th>2nd</th>
+                            <th>SR</th>
+                            <th>CR</th>
+                            <th>SR</th>
+                            <th>CR</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Base</td>
+                            <td>-0.31</td>
+                            <td>-0.35</td>
+                            <td>3.91</td>
+                            <td>63.24</td>
+                            <td>0.78</td>
+                            <td>73.71</td>
+                        </tr>
+                        <tr>
+                            <td>OR</td>
+                            <td>-0.18</td>
+                            <td>-0.21</td>
+                            <td>48.43</td>
+                            <td>82.80</td>
+                            <td>3.91</td>
+                            <td>77.26</td>
+                        </tr>
+                        <tr>
+                            <td>MC-PR</td>
+                            <td>-0.11</td>
+                            <td>-0.20</td>
+                            <td>34.72</td>
+                            <td>77.39</td>
+                            <td>2.34</td>
+                            <td>78.67</td>
+                        </tr>
+                        <tr class="highlight-row">
+                            <td><strong>VPR</strong></td>
+                            <td><strong>-0.09</strong></td>
+                            <td><strong>-0.11</strong></td>
+                            <td><strong>56.25</strong></td>
+                            <td><strong>85.13</strong></td>
+                            <td><strong>10.39</strong></td>
+                            <td><strong>80.27</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="caption">In-domain performance. Tic-Tac-Toe reports average return against a strong MCTS opponent; Sudoku and Minesweeper report success rate (SR) and completion rate (CR).</p>
+
+            <h3>Zero-Shot Transfer</h3>
+            <div class="cards metric-grid">
+                <article class="metric-card">
+                    <span class="metric-value">62.59</span>
+                    <span class="metric-label">Best average on 7 general reasoning benchmarks</span>
+                    <p>Minesweeper-trained VPR gives the strongest average over GSM8K, MATH-500, AIME24/25, GPQA-Diamond, BBH, and MMLU-Pro.</p>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-value">50.17</span>
+                    <span class="metric-label">Best GPQA-Diamond score</span>
+                    <p>Sudoku-trained VPR shows the largest GPQA gain, consistent with constraint elimination helping multiple-choice reasoning.</p>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-value">28.61</span>
+                    <span class="metric-label">Best ALFWorld success rate</span>
+                    <p>Minesweeper-trained VPR transfers partial-observation reasoning to embodied text-command planning.</p>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-value">34.29</span>
+                    <span class="metric-label">Best WebShop score</span>
+                    <p>Sudoku-trained VPR improves goal-directed web interaction, suggesting useful transfer from verifiable process supervision.</p>
+                </article>
+            </div>
+        </section>
+
+        <section id="analysis">
+            <h2>Analysis</h2>
+            <div class="analysis-grid">
+                <div>
+                    <h3>Theoretical View</h3>
+                    <p>
+                        VPR can be interpreted as an on-policy filtered imitation-like update over oracle-valid sampled
+                        actions. Under verifier error, gradient bias scales linearly with verifier disagreement. Under a
+                        simple long-horizon success model, VPR signal accumulates across steps while outcome-reward
+                        signal is diluted with horizon.
+                    </p>
+                </div>
+                <div>
+                    <h3>Oracle Quality Matters</h3>
+                    <p>
+                        Dense feedback is not automatically beneficial. In the Tic-Tac-Toe ablation, a weak MCTS oracle
+                        with only 100 simulations actively hurts both in-domain performance and downstream
+                        generalization, while stronger verifiers recover and improve the learning signal.
+                    </p>
+                </div>
+            </div>
+            <div class="takeaway">
+                <strong>Takeaway.</strong> VPR is most useful when intermediate correctness is both available and
+                reliable: the verifier should be dense enough to solve credit assignment, and accurate enough to avoid
+                teaching the policy misleading process behavior.
+            </div>
+        </section>
+
+        <section id="resources">
+            <h2>Resources</h2>
+            <div class="resource-grid">
+                <a class="resource-card" href="https://arxiv.org/abs/2605.10325" target="_blank">
+                    <i class="fas fa-file-pdf"></i>
+                    <span>Paper</span>
+                    <p>Read the full arXiv manuscript.</p>
+                </a>
+                <a class="resource-card" href="https://github.com/thu-nics/VPR" target="_blank">
+                    <i class="fab fa-github"></i>
+                    <span>Code</span>
+                    <p>Training scripts and evaluation code.</p>
+                </a>
+                <a class="resource-card" href="https://huggingface.co/collections/nics-efc/vpr" target="_blank">
+                    <img src="static/images/hf-logo.png" alt="Hugging Face">
+                    <span>Models</span>
+                    <p>Released VPR model checkpoints.</p>
+                </a>
+            </div>
+        </section>
+
+        <section id="bibtex">
+            <h2>BibTeX</h2>
+            <div class="citation-block">
+                <button class="copy-btn" id="copyBibtex" title="Copy BibTeX" aria-label="Copy BibTeX">
+                    <i class="fas fa-clone"></i>
+                </button>
+                <pre><code id="bibtex-code">@misc{yuan2026verifiable,
+  title={Verifiable Process Rewards for Agentic Reasoning},
+  author={Huining Yuan and Zelai Xu and Huaijie Wang and Xiangmin Yi and Jiaxuan Gao and Xiao-Ping Zhang and Yu Wang and Chao Yu and Yi Wu},
+  year={2026},
+  eprint={2605.10325},
+  archivePrefix={arXiv},
+  primaryClass={cs.AI},
+  url={https://arxiv.org/abs/2605.10325}
+}</code></pre>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2026 VPR Project, licensed under <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>.</p>
+    </footer>
+
+    <button class="scroll-top" id="scrollTop" aria-label="Back to top">
+        <i class="fas fa-chevron-up"></i>
+    </button>
+
+    <script>
+    (function () {
+        var navGlobal = document.getElementById('navGlobal');
+        var navBar = document.getElementById('navStickyBar');
+        var scrollTopBtn = document.getElementById('scrollTop');
+        var header = document.querySelector('header');
+        var sectionIds = ['overview', 'method', 'results', 'analysis', 'resources', 'bibtex'];
+
+        function updateNav() {
+            var heroBottom = header ? header.offsetTop + header.offsetHeight : 300;
+            var scrolledPastHero = window.scrollY > heroBottom - 60;
+            navBar.classList.toggle('visible', scrolledPastHero);
+            navGlobal.classList.toggle('hidden', scrolledPastHero);
+
+            var current = '';
+            sectionIds.forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && window.scrollY >= el.offsetTop - 90) {
+                    current = id;
+                }
+            });
+            document.querySelectorAll('.nav-sticky-links a').forEach(function (link) {
+                link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+            });
+        }
+
+        function updateScrollTop() {
+            scrollTopBtn.classList.toggle('visible', window.scrollY > 500);
+        }
+
+        window.addEventListener('scroll', updateNav, { passive: true });
+        window.addEventListener('scroll', updateScrollTop, { passive: true });
+
+        var mobileToggle = document.getElementById('navMobileToggle');
+        var navLinks = document.getElementById('navStickyLinks');
+        if (mobileToggle && navLinks) {
+            mobileToggle.addEventListener('click', function () {
+                mobileToggle.classList.toggle('active');
+                navLinks.classList.toggle('mobile-open');
+            });
+            navLinks.querySelectorAll('a').forEach(function (link) {
+                link.addEventListener('click', function () {
+                    mobileToggle.classList.remove('active');
+                    navLinks.classList.remove('mobile-open');
+                });
+            });
+        }
+
+        scrollTopBtn.addEventListener('click', function () {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        var copyBtn = document.getElementById('copyBibtex');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', function () {
+                var text = document.getElementById('bibtex-code').innerText;
+                navigator.clipboard.writeText(text).then(function () {
+                    copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                    setTimeout(function () {
+                        copyBtn.innerHTML = '<i class="fas fa-clone"></i>';
+                    }, 1800);
+                });
+            });
+        }
+
+        updateNav();
+        updateScrollTop();
+    })();
+    </script>
+</body>
+
+</html>

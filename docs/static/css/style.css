@@ -52,24 +52,6 @@ header {
     text-align: center;
 }
 
-.paper-status-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 auto 18px;
-    padding: 8px 18px;
-    border: 1px solid var(--award-border);
-    border-radius: 999px;
-    background: linear-gradient(135deg, var(--award-bg-soft) 0%, var(--award-bg) 100%);
-    box-shadow: 0 8px 20px var(--award-shadow);
-    color: var(--primary-color);
-    font-size: 0.82rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    line-height: 1;
-    text-transform: uppercase;
-}
-
 h1 {
     max-width: 940px;
     margin: 0 auto 18px;
@@ -161,7 +143,6 @@ main a:not(.btn):not(.resource-card):hover {
 .header-image {
     width: 100%;
     display: block;
-    border: 1px solid var(--border-color);
     border-radius: 8px;
     background: #ffffff;
 }
@@ -199,6 +180,15 @@ h3 {
     line-height: 1.25;
 }
 
+h4.subsection-title {
+    margin: 28px 0 8px;
+    color: var(--ink-blue);
+    font-size: 1.05rem;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-align: left;
+}
+
 p {
     margin: 12px 0;
 }
@@ -209,17 +199,18 @@ img {
 }
 
 .overview-content {
-    display: grid;
-    grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
-    gap: 32px;
-    align-items: start;
+    display: block;
 }
 
-.overview-image img,
+.overview-figure {
+    margin: 0 0 26px;
+    text-align: center;
+}
+
+.overview-figure img,
 .method-image img {
     width: 100%;
     border-radius: 8px;
-    border: 1px solid var(--border-color);
     background: #ffffff;
 }
 
@@ -290,6 +281,10 @@ img {
     text-align: center;
 }
 
+#method .method-image {
+    margin-top: 0;
+}
+
 .cards {
     display: grid;
     gap: 16px;
@@ -331,6 +326,10 @@ table {
     border-collapse: collapse;
     font-size: 0.9rem;
     background: #ffffff;
+}
+
+.wide-table table {
+    min-width: 980px;
 }
 
 th,
@@ -394,10 +393,38 @@ tbody tr:first-child td {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 26px;
+    align-items: start;
 }
 
 .analysis-grid h3 {
     margin-top: 0;
+}
+
+.analysis-theory {
+    grid-column: 1 / -1;
+}
+
+.analysis-stack {
+    display: grid;
+    gap: 26px;
+}
+
+.analysis-card {
+    min-height: 100%;
+}
+
+.analysis-card p {
+    margin-bottom: 0;
+}
+
+.analysis-figure {
+    margin: 20px 0 0;
+}
+
+.analysis-figure img {
+    display: block;
+    width: 100%;
+    border-radius: 8px;
 }
 
 .takeaway {
@@ -752,9 +779,16 @@ footer a:hover {
 }
 
 @media (max-width: 920px) {
-    .overview-content,
     .analysis-grid {
         grid-template-columns: 1fr;
+    }
+
+    .analysis-theory {
+        grid-column: auto;
+    }
+
+    .analysis-figure {
+        margin-top: 0;
     }
 
     .three-col,

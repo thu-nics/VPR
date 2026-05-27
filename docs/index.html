@@ -19,8 +19,8 @@
             <div class="nav-global-links">
                 <a href="https://vs-bench.github.io/" target="_blank">VS-Bench</a>
                 <a href="https://thu-nics.github.io/MARSHAL/" target="_blank">MARSHAL</a>
-                <a href="#" class="active" onclick="window.scrollTo({top:0,behavior:'smooth'}); return false;">VPR</a>
                 <a href="https://wideseek-r1.github.io/" target="_blank">WideSeek-R1</a>
+                <a href="#" class="active" onclick="window.scrollTo({top:0,behavior:'smooth'}); return false;">VPR</a>
             </div>
         </div>
     </nav>
@@ -48,7 +48,6 @@
                     <a class="nav-project-card" href="#" onclick="window.scrollTo({top:0,behavior:'smooth'}); return false;">
                         <div class="nav-project-card-header">
                             <div class="nav-project-card-title active-project">VPR</div>
-                            <div class="nav-project-card-venue">NeurIPS 2026</div>
                         </div>
                         <div class="nav-project-card-desc">Verifiable process rewards for long-horizon agentic reasoning.</div>
                     </a>
@@ -74,11 +73,9 @@
 
     <header>
         <div class="container hero-content">
-            <div class="paper-status-badge">NeurIPS 2026</div>
             <h1>Verifiable Process Rewards <span>for Agentic Reasoning</span></h1>
             <p class="hero-lead">
-                VPR turns symbolic and algorithmic oracles into dense turn-level rewards, giving LLM agents reliable
-                process supervision for long-horizon reasoning instead of waiting for sparse final outcomes.
+                VPR turns verifiable oracles into dense turn-level rewards for long-horizon agentic reasoning.
             </p>
             <div class="authors">
                 <p>
@@ -87,7 +84,7 @@
                     <a href="https://sites.google.com/view/xiaopingzhang" target="_blank">Xiao-Ping Zhang</a>,
                     <a href="https://nicsefc.ee.tsinghua.edu.cn/people/YuWang" target="_blank">Yu Wang</a><sup>&dagger;</sup>,
                     <a href="https://nicsefc.ee.tsinghua.edu.cn/people/ChaoYu" target="_blank">Chao Yu</a><sup>&dagger;</sup>,
-                    Yi Wu<sup>&dagger;</sup>
+                    <a href="https://jxwuyi.weebly.com/" target="_blank">Yi Wu</a><sup>&dagger;</sup>
                 </p>
                 <p class="affiliations">Tsinghua University</p>
                 <p class="affiliations"><sup>*</sup>Equal contribution. <sup>&dagger;</sup>Corresponding authors.</p>
@@ -98,14 +95,15 @@
                 <a href="https://huggingface.co/collections/nics-efc/vpr" class="btn" target="_blank"><img src="static/images/hf-logo.png" alt="HF" class="btn-icon"> Models</a>
             </div>
         </div>
-        <div class="container header-image-container">
-            <img src="static/images/overview.png" alt="VPR compares outcome rewards, rollout-based process rewards, and verifiable process rewards." class="header-image">
-        </div>
     </header>
 
     <main class="container">
         <section id="overview">
             <h2>Overview</h2>
+            <div class="overview-figure">
+                <img src="static/images/overview.png" alt="VPR compares outcome rewards, rollout-based process rewards, and verifiable process rewards.">
+                <p class="caption">Three reward designs for long-horizon reasoning: outcome-level rewards, rollout-based process rewards, and verifiable process rewards.</p>
+            </div>
             <div class="overview-content">
                 <div class="overview-text">
                     <p>
@@ -135,15 +133,15 @@
                         </div>
                     </div>
                 </div>
-                <div class="overview-image">
-                    <img src="static/images/teaser.png" alt="Minesweeper trajectory comparison between outcome reward and VPR.">
-                    <p class="caption">VPR scores intermediate decisions against a posterior verifier, so hazardous reveals and correct flags receive immediate credit signals.</p>
-                </div>
             </div>
         </section>
 
         <section id="method">
             <h2>Method</h2>
+            <div class="method-image">
+                <img src="static/images/vpr.png" alt="Three VPR instantiations in Tic-Tac-Toe, Sudoku, and Minesweeper.">
+                <p class="caption">Three VPR instantiations: search-based verification, constraint-based verification, and posterior-based verification.</p>
+            </div>
             <p>
                 VPR focuses on agentic reasoning settings where a verifier
                 <span class="math">V(s<sub>t</sub>, a<sub>t</sub>)</span> can check whether the current action is valid,
@@ -151,11 +149,6 @@
                 dense process rewards:
             </p>
             <div class="formula">r<sub>t</sub><sup>VPR</sup> = V(s<sub>t</sub>, a<sub>t</sub>)</div>
-
-            <div class="method-image">
-                <img src="static/images/vpr.png" alt="Three VPR instantiations in Tic-Tac-Toe, Sudoku, and Minesweeper.">
-                <p class="caption">Three VPR instantiations: search-based verification, constraint-based verification, and posterior-based verification.</p>
-            </div>
 
             <div class="cards three-col">
                 <article class="card">
@@ -189,6 +182,7 @@
                 environments, VPR consistently outperforms outcome-level reward and Monte Carlo process-reward baselines.
             </p>
 
+            <h3>In-Domain Performance</h3>
             <div class="method-image">
                 <img src="static/images/eval_curve.png" alt="Evaluation curves over VPR training.">
                 <p class="caption">Evaluation curves over GRPO training show that dense verifiable feedback improves sample efficiency and final policy quality.</p>
@@ -226,7 +220,7 @@
                             <td>OR</td>
                             <td>-0.18</td>
                             <td>-0.21</td>
-                            <td>48.43</td>
+                            <td>48.44</td>
                             <td>82.80</td>
                             <td>3.91</td>
                             <td>77.26</td>
@@ -235,7 +229,7 @@
                             <td>MC-PR</td>
                             <td>-0.11</td>
                             <td>-0.20</td>
-                            <td>34.72</td>
+                            <td>34.73</td>
                             <td>77.39</td>
                             <td>2.34</td>
                             <td>78.67</td>
@@ -262,7 +256,7 @@
                     <p>Minesweeper-trained VPR gives the strongest average over GSM8K, MATH-500, AIME24/25, GPQA-Diamond, BBH, and MMLU-Pro.</p>
                 </article>
                 <article class="metric-card">
-                    <span class="metric-value">50.17</span>
+                    <span class="metric-value">50.20</span>
                     <span class="metric-label">Best GPQA-Diamond score</span>
                     <p>Sudoku-trained VPR shows the largest GPQA gain, consistent with constraint elimination helping multiple-choice reasoning.</p>
                 </article>
@@ -277,12 +271,231 @@
                     <p>Sudoku-trained VPR improves goal-directed web interaction, suggesting useful transfer from verifiable process supervision.</p>
                 </article>
             </div>
+
+            <h4 class="subsection-title">General Reasoning Benchmarks</h4>
+            <div class="table-container wide-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Training Env.</th>
+                            <th>Method</th>
+                            <th>GSM8K</th>
+                            <th>MATH-500</th>
+                            <th>AIME24</th>
+                            <th>AIME25</th>
+                            <th>GPQA-D</th>
+                            <th>BBH</th>
+                            <th>MMLU-P</th>
+                            <th>Avg.</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>N/A</td>
+                            <td>Base</td>
+                            <td>94.57</td>
+                            <td>84.40</td>
+                            <td>30.00</td>
+                            <td>18.33</td>
+                            <td>43.13</td>
+                            <td>88.39</td>
+                            <td>67.61</td>
+                            <td>60.92</td>
+                        </tr>
+                        <tr>
+                            <td rowspan="3">Tic-Tac-Toe</td>
+                            <td>OR</td>
+                            <td>94.53</td>
+                            <td>84.28</td>
+                            <td>31.00</td>
+                            <td>18.67</td>
+                            <td>43.84</td>
+                            <td>88.47</td>
+                            <td>67.70</td>
+                            <td>61.21</td>
+                        </tr>
+                        <tr>
+                            <td>MC-PR</td>
+                            <td>94.63</td>
+                            <td>84.36</td>
+                            <td>30.67</td>
+                            <td>19.00</td>
+                            <td>44.19</td>
+                            <td>88.51</td>
+                            <td>67.72</td>
+                            <td>61.30</td>
+                        </tr>
+                        <tr class="highlight-row">
+                            <td><strong>VPR</strong></td>
+                            <td>94.74</td>
+                            <td>83.80</td>
+                            <td><strong>33.33</strong></td>
+                            <td><strong>21.33</strong></td>
+                            <td>45.15</td>
+                            <td><strong>88.96</strong></td>
+                            <td>67.86</td>
+                            <td>62.17</td>
+                        </tr>
+                        <tr>
+                            <td rowspan="3">Sudoku</td>
+                            <td>OR</td>
+                            <td>94.40</td>
+                            <td>84.16</td>
+                            <td>30.67</td>
+                            <td>18.67</td>
+                            <td>45.25</td>
+                            <td>88.56</td>
+                            <td>67.76</td>
+                            <td>61.35</td>
+                        </tr>
+                        <tr>
+                            <td>MC-PR</td>
+                            <td>94.54</td>
+                            <td>84.28</td>
+                            <td>30.33</td>
+                            <td>18.67</td>
+                            <td>44.04</td>
+                            <td>88.63</td>
+                            <td>67.65</td>
+                            <td>61.16</td>
+                        </tr>
+                        <tr class="highlight-row">
+                            <td><strong>VPR</strong></td>
+                            <td>94.65</td>
+                            <td>83.54</td>
+                            <td>31.67</td>
+                            <td>19.67</td>
+                            <td><strong>50.20</strong></td>
+                            <td>88.82</td>
+                            <td>67.88</td>
+                            <td>62.35</td>
+                        </tr>
+                        <tr>
+                            <td rowspan="3">Minesweeper</td>
+                            <td>OR</td>
+                            <td>94.56</td>
+                            <td>84.62</td>
+                            <td>31.33</td>
+                            <td>19.00</td>
+                            <td>44.29</td>
+                            <td>88.45</td>
+                            <td>67.88</td>
+                            <td>61.45</td>
+                        </tr>
+                        <tr>
+                            <td>MC-PR</td>
+                            <td>94.66</td>
+                            <td>84.58</td>
+                            <td>31.00</td>
+                            <td>18.67</td>
+                            <td>44.55</td>
+                            <td>88.42</td>
+                            <td>67.73</td>
+                            <td>61.37</td>
+                        </tr>
+                        <tr class="highlight-row">
+                            <td><strong>VPR</strong></td>
+                            <td><strong>94.81</strong></td>
+                            <td><strong>85.00</strong></td>
+                            <td>32.67</td>
+                            <td>21.00</td>
+                            <td>48.33</td>
+                            <td>88.34</td>
+                            <td><strong>67.98</strong></td>
+                            <td><strong>62.59</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="caption">Zero-shot pass@1 on general reasoning benchmarks. VPR achieves the highest average score for every training environment.</p>
+
+            <h4 class="subsection-title">Agentic Reasoning Tasks</h4>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Training Env.</th>
+                            <th>Method</th>
+                            <th>ALFWorld SR</th>
+                            <th>WebShop Score</th>
+                            <th>WebShop SR</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>N/A</td>
+                            <td>Base</td>
+                            <td>24.13</td>
+                            <td>27.42</td>
+                            <td>1.40</td>
+                        </tr>
+                        <tr>
+                            <td rowspan="3">Tic-Tac-Toe</td>
+                            <td>OR</td>
+                            <td>25.37</td>
+                            <td>28.76</td>
+                            <td>1.53</td>
+                        </tr>
+                        <tr>
+                            <td>MC-PR</td>
+                            <td>26.12</td>
+                            <td>29.45</td>
+                            <td>1.67</td>
+                        </tr>
+                        <tr class="highlight-row">
+                            <td><strong>VPR</strong></td>
+                            <td>27.36</td>
+                            <td>30.88</td>
+                            <td>1.87</td>
+                        </tr>
+                        <tr>
+                            <td rowspan="3">Sudoku</td>
+                            <td>OR</td>
+                            <td>24.88</td>
+                            <td>30.62</td>
+                            <td>1.67</td>
+                        </tr>
+                        <tr>
+                            <td>MC-PR</td>
+                            <td>25.12</td>
+                            <td>30.18</td>
+                            <td>1.73</td>
+                        </tr>
+                        <tr class="highlight-row">
+                            <td><strong>VPR</strong></td>
+                            <td>25.62</td>
+                            <td><strong>34.29</strong></td>
+                            <td><strong>2.20</strong></td>
+                        </tr>
+                        <tr>
+                            <td rowspan="3">Minesweeper</td>
+                            <td>OR</td>
+                            <td>26.12</td>
+                            <td>28.91</td>
+                            <td>1.60</td>
+                        </tr>
+                        <tr>
+                            <td>MC-PR</td>
+                            <td>27.11</td>
+                            <td>29.62</td>
+                            <td>1.73</td>
+                        </tr>
+                        <tr class="highlight-row">
+                            <td><strong>VPR</strong></td>
+                            <td><strong>28.61</strong></td>
+                            <td>30.38</td>
+                            <td>1.93</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="caption">Zero-shot transfer to ALFWorld and WebShop. VPR improves over Base and outperforms OR / MC-PR across training environments.</p>
         </section>
 
         <section id="analysis">
             <h2>Analysis</h2>
             <div class="analysis-grid">
-                <div>
+                <article class="analysis-card analysis-theory">
                     <h3>Theoretical View</h3>
                     <p>
                         VPR can be interpreted as an on-policy filtered imitation-like update over oracle-valid sampled
@@ -290,15 +503,30 @@
                         simple long-horizon success model, VPR signal accumulates across steps while outcome-reward
                         signal is diluted with horizon.
                     </p>
+                </article>
+                <div class="analysis-stack">
+                    <article class="analysis-card">
+                        <h3>Oracle Quality Matters</h3>
+                        <p>
+                            Dense feedback is not automatically beneficial. In the Tic-Tac-Toe ablation, a weak MCTS oracle
+                            with only 100 simulations actively hurts both in-domain performance and downstream
+                            generalization, while stronger verifiers recover and improve the learning signal.
+                        </p>
+                    </article>
+                    <article class="analysis-card">
+                        <h3>Pattern Analysis</h3>
+                        <p>
+                            A side-by-side Minesweeper trajectory makes the credit-assignment pattern concrete. OR-trained
+                            policies receive no signal until termination, so locally risky reveals are not penalized and
+                            cautious flags are not reinforced. VPR instead scores every intermediate action against the
+                            posterior verifier, producing immediate feedback for actions.
+                        </p>
+                    </article>
                 </div>
-                <div>
-                    <h3>Oracle Quality Matters</h3>
-                    <p>
-                        Dense feedback is not automatically beneficial. In the Tic-Tac-Toe ablation, a weak MCTS oracle
-                        with only 100 simulations actively hurts both in-domain performance and downstream
-                        generalization, while stronger verifiers recover and improve the learning signal.
-                    </p>
-                </div>
+                <figure class="analysis-figure">
+                    <img src="static/images/teaser.png" alt="Minesweeper trajectory comparison between outcome reward and VPR.">
+                    <figcaption class="caption">VPR assigns step-level credit in Minesweeper, while outcome reward leaves intermediate decisions uncredited until the final result.</figcaption>
+                </figure>
             </div>
             <div class="takeaway">
                 <strong>Takeaway.</strong> VPR is most useful when intermediate correctness is both available and

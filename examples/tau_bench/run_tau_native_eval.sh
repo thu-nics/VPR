@@ -2,12 +2,20 @@
 # Evaluate arbitrary local/HF or VERL FSDP models with the native tau2 runner.
 set -euo pipefail
 
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$@"
+    else
+        shasum -a 256 "$@"
+    fi
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%S)"
 
-PYTHON="${PYTHON:-/opt/venv/verl-agent/bin/python}"
-VLLM_BIN="${VLLM_BIN:-/opt/venv/verl-agent/bin/vllm}"
+PYTHON="${PYTHON:-python}"
+VLLM_BIN="${VLLM_BIN:-vllm}"
 TAU2_ROOT="${TAU2_ROOT:-$REPO_ROOT/.cache/tau2-bench-17e07b1}"
 TAU2_DATA_DIR="${TAU2_DATA_DIR:-$TAU2_ROOT/data}"
 MODEL_SPECS_FILE="${MODEL_SPECS_FILE:-}"
@@ -123,6 +131,20 @@ abspath() {
     fi
 }
 
+model_file_metadata() {
+    local directory="$1" file name size mtime
+    find "$directory" -maxdepth 1 -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+        name="$(basename "$file")"
+        case "$name" in
+            model* | *.bin | config.json | generation_config.json | tokenizer* | special_tokens_map.json | chat_template* | merges.txt | vocab.json | added_tokens.json) ;;
+            *) continue ;;
+        esac
+        size="$(wc -c < "$file" | tr -d ' ')"
+        mtime="$(stat -f '%m' "$file" 2>/dev/null || stat -c '%Y' "$file")"
+        printf '%s|%s|%s\n' "$name" "$size" "$mtime"
+    done
+}
+
 stop_server() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
         log "Stopping vLLM server pid=$SERVER_PID"
@@ -158,8 +180,10 @@ TAU2_ROOT="$(abspath "$TAU2_ROOT")"
 TAU2_DATA_DIR="$(abspath "$TAU2_DATA_DIR")"
 
 [[ -f "$MODEL_SPECS_FILE" ]] || die "model registry not found: $MODEL_SPECS_FILE"
-[[ -x "$PYTHON" ]] || die "Python not found: $PYTHON"
-[[ -x "$VLLM_BIN" ]] || die "vLLM not found: $VLLM_BIN"
+if [[ "$DRY_RUN" != 1 ]]; then
+    command -v "$PYTHON" >/dev/null 2>&1 || [[ -x "$PYTHON" ]] || die "Python not found: $PYTHON"
+    command -v "$VLLM_BIN" >/dev/null 2>&1 || [[ -x "$VLLM_BIN" ]] || die "vLLM not found: $VLLM_BIN"
+fi
 [[ -d "$TAU2_ROOT/src/tau2" ]] || die "tau2 source not found: $TAU2_ROOT"
 [[ -d "$TAU2_DATA_DIR" ]] || die "tau2 data not found: $TAU2_DATA_DIR"
 if [[ "$DRY_RUN" != 1 ]]; then
@@ -177,9 +201,9 @@ if [[ -n "$NUM_TASKS" ]]; then
 fi
 (( TP_SIZE * DP_SIZE == N_GPUS )) ||
     die "TP_SIZE * DP_SIZE must equal N_GPUS"
-case "${AGENT_ENABLE_THINKING,,}" in
-    true | 1 | yes) AGENT_ENABLE_THINKING=true ;;
-    false | 0 | no) AGENT_ENABLE_THINKING=false ;;
+case "$AGENT_ENABLE_THINKING" in
+    true | True | TRUE | 1 | yes | Yes | YES) AGENT_ENABLE_THINKING=true ;;
+    false | False | FALSE | 0 | no | No | NO) AGENT_ENABLE_THINKING=false ;;
     *) die "AGENT_ENABLE_THINKING must be true or false" ;;
 esac
 case "$ALLOW_NL_ASSERTION_PROTOCOL_UPGRADE" in
@@ -269,12 +293,10 @@ source_identity() {
         if [[ "$checkpoint_path" != "-" ]]; then
             scan_path="$checkpoint_path/actor"
             printf 'checkpoint_realpath=%s\n' "$(realpath "$checkpoint_path")"
-            printf 'merger_sha256=%s\n' "$(sha256sum "$REPO_ROOT/scripts/model_merger.py" | awk '{print $1}')"
+            printf 'merger_sha256=%s\n' "$(sha256 "$REPO_ROOT/scripts/model_merger.py" | awk '{print $1}')"
         fi
-        find "$scan_path" -maxdepth 1 -type f -regextype posix-extended \
-            -regex '.*/(model.*[.]safetensors.*|.*[.]bin|model_world_size_[^/]+|config[.]json|generation_config[.]json|tokenizer[^/]*|special_tokens_map[.]json|chat_template[^/]*|merges[.]txt|vocab[.]json|added_tokens[.]json)' \
-            -print0 | sort -z | xargs -0 -r stat -c '%n|%s|%y'
-    } | sha256sum | awk '{print $1}'
+        model_file_metadata "$scan_path"
+    } | sha256 | awk '{print $1}'
 }
 
 prepare_model() {
@@ -358,7 +380,7 @@ write_protocol() {
         printf 'AGENT_PROTOCOL=%s\n' "$AGENT_PROTOCOL"
         printf 'TRAINING_DECISION_LIMIT=%s\n' "$TRAINING_DECISION_LIMIT"
         printf 'TRAINING_INVALID_ACTION_LIMIT=%s\n' "$TRAINING_INVALID_ACTION_LIMIT"
-        printf 'MODEL_SPECS_SHA256=%s\n' "$(sha256sum "$MODEL_SPECS_FILE" | awk '{print $1}')"
+        printf 'MODEL_SPECS_SHA256=%s\n' "$(sha256 "$MODEL_SPECS_FILE" | awk '{print $1}')"
         printf 'MODEL_FILTER=%s\n' "${MODEL_FILTER:-all}"
         printf 'DOMAINS=%s\n' "$DOMAINS"
         printf 'TASK_SPLITS=airline:base,retail:base,telecom:base\n'
@@ -380,10 +402,10 @@ write_protocol() {
             "$GPU_MEM_UTIL" "$MAX_MODEL_LEN" "$MAX_NUM_BATCHED_TOKENS" \
             "$MAX_NUM_SEQS"
         printf 'TAU2_REVISION=%s\n' "$tau_revision"
-        printf 'EVALUATOR_SHA256=%s\n' "$(sha256sum "$SCRIPT_DIR/deterministic_evaluator.py" | awk '{print $1}')"
-        printf 'DRIVER_SHA256=%s\n' "$(sha256sum "$SCRIPT_DIR/native_tau_eval.py" | awk '{print $1}')"
-        printf 'AGENT_ADAPTER_SHA256=%s\n' "$(sha256sum "$SCRIPT_DIR/training_compatible_agent.py" | awk '{print $1}')"
-        printf 'LAUNCHER_SHA256=%s\n' "$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')"
+        printf 'EVALUATOR_SHA256=%s\n' "$(sha256 "$SCRIPT_DIR/deterministic_evaluator.py" | awk '{print $1}')"
+        printf 'DRIVER_SHA256=%s\n' "$(sha256 "$SCRIPT_DIR/native_tau_eval.py" | awk '{print $1}')"
+        printf 'AGENT_ADAPTER_SHA256=%s\n' "$(sha256 "$SCRIPT_DIR/training_compatible_agent.py" | awk '{print $1}')"
+        printf 'LAUNCHER_SHA256=%s\n' "$(sha256 "${BASH_SOURCE[0]}" | awk '{print $1}')"
     } > "$candidate"
 
     local existing="$RUN_DIR/protocol.env"
@@ -550,8 +572,10 @@ run_domain() {
 }
 
 mkdir -p "$RUN_DIR"
-exec 9>"$RUN_DIR/.eval.lock"
-flock -n 9 || die "another evaluator is using RUN_DIR=$RUN_DIR"
+if [[ "$DRY_RUN" != 1 ]]; then
+    exec 9>"$RUN_DIR/.eval.lock"
+    flock -n 9 || die "another evaluator is using RUN_DIR=$RUN_DIR"
+fi
 write_protocol
 wait_for_selected_gpus
 

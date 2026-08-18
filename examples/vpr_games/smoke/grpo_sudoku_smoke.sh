@@ -3,10 +3,12 @@
 # Asserts: distinct per-turn advantages, bounded prompts, terminal-only outcome bonus.
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-/mnt/project_rlinf/yuanhuining/models/Qwen3-4B}"
-PYTHON="${PYTHON:-/opt/venv/verl-agent/bin/python}"
+MODEL_PATH="${MODEL_PATH:-}"
+PYTHON="${PYTHON:-python}"
+DRY_RUN="${DRY_RUN:-0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VPR_GAMES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$VPR_GAMES_DIR/../.." && pwd)"
 DATA_DIR="$VPR_GAMES_DIR/data/vpr_sudoku"
 LOG_DIR="$SCRIPT_DIR/smoke_logs"
 mkdir -p "$LOG_DIR"
@@ -19,11 +21,16 @@ echo "Model:    $MODEL_PATH"
 echo "Log:      $LOG_FILE"
 echo "Evidence: $EVIDENCE_FILE"
 
+if [ -z "$MODEL_PATH" ]; then echo "ERROR: MODEL_PATH is required" >&2; exit 1; fi
+if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY RUN: configuration validated; training was not started."
+    exit 0
+fi
 if [ ! -d "$MODEL_PATH" ]; then
     echo "ERROR: Model not found at $MODEL_PATH" >&2
     exit 1
 fi
-if [ ! -x "$PYTHON" ]; then
+if ! command -v "$PYTHON" >/dev/null 2>&1 && [ ! -x "$PYTHON" ]; then
     echo "ERROR: Python not found at $PYTHON" >&2
     exit 1
 fi

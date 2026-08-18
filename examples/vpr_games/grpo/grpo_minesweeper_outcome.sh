@@ -1,43 +1,33 @@
 #!/bin/bash
 # ============================================================================
-# Minesweeper —— 标准 GRPO + outcome（结果）奖励 训练脚本
 #
-#   * algorithm.adv_estimator=grpo  → verl 原生 compute_grpo_outcome_advantage（组内归一化）。
-#   * env.minesweeper.reward_mode=outcome → 纯结果奖励：合法非终止步 0；揭开所有安全格
-#     （通关）+1；踩雷/非法动作终止 -1；超时/步数耗尽 0。
-#     注意：通关判定 = 揭开全部安全格（覆盖 GEM 默认的 flag-all 判定）。
-#   * 无对手；扫雷棋盘规格由 env.minesweeper 配置控制。
-#   * KL 正则：由 USE_KL 和 KL_COEF 控制。
 #
-# 本次配置（可用同名环境变量覆盖）：
-#   * thinking 模式、输出长度、训练步数、rollout 规模、验证规模均由下方环境变量控制。
-#   * 训练产物写入 RUN_DIR 下的日志、checkpoint、tensorboard 和 Hydra 配置目录。
 #
-# 依赖：需要 GEM（pip install 'git+https://github.com/axon-rl/gem.git'）。
 # ============================================================================
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-/mnt/project_rlinf/yuanhuining/models/Qwen3-4B}"
-PYTHON="${PYTHON:-/opt/venv/verl-agent/bin/python}"
-TRAIN_STEPS="${TRAIN_STEPS:-200}"       # 训练步数
-TRAIN_BATCH="${TRAIN_BATCH:-32}"         # 每个训练 step 的 prompt 数
-ROLLOUT_N="${ROLLOUT_N:-8}"            # GRPO 组大小；每 step 轨迹数 = TRAIN_BATCH x ROLLOUT_N
-VAL_BATCH="${VAL_BATCH:-128}"            # 每次验证的轨迹数
-PPO_MINI_BATCH="${PPO_MINI_BATCH:-32}"  # PPO 更新使用的 mini-batch
-MAX_RESP="${MAX_RESP:-4096}"           # 生成响应的最大 token 长度
-SAVE_FREQ="${SAVE_FREQ:-25}"           # checkpoint 保存间隔
+MODEL_PATH="${MODEL_PATH:-}"
+PYTHON="${PYTHON:-python}"
+DRY_RUN="${DRY_RUN:-0}"
+TRAIN_STEPS="${TRAIN_STEPS:-200}"
+TRAIN_BATCH="${TRAIN_BATCH:-32}"
+ROLLOUT_N="${ROLLOUT_N:-8}"
+VAL_BATCH="${VAL_BATCH:-128}"
+PPO_MINI_BATCH="${PPO_MINI_BATCH:-32}"
+MAX_RESP="${MAX_RESP:-4096}"
+SAVE_FREQ="${SAVE_FREQ:-25}"
 RESUME_MODE="${RESUME_MODE:-disable}"     # disable/auto/resume_path
-RESUME_FROM_PATH="${RESUME_FROM_PATH:-}"  # RESUME_MODE=resume_path 时指定 global_step_* 目录
-TEST_FREQ="${TEST_FREQ:-20}"           # 验证间隔
-ENABLE_THINKING="${ENABLE_THINKING:-True}"  # Qwen chat template thinking 开关
-USE_KL="${USE_KL:-True}"               # actor KL loss 开关
-KL_COEF="${KL_COEF:-0.001}"            # actor KL loss 系数
-PPO_MICRO="${PPO_MICRO:-2}"            # actor 训练 micro-batch
+RESUME_FROM_PATH="${RESUME_FROM_PATH:-}"
+TEST_FREQ="${TEST_FREQ:-20}"
+ENABLE_THINKING="${ENABLE_THINKING:-True}"
+USE_KL="${USE_KL:-True}"
+KL_COEF="${KL_COEF:-0.001}"
+PPO_MICRO="${PPO_MICRO:-2}"
 LOGPROB_MICRO="${LOGPROB_MICRO:-4}"    # rollout/ref log-prob micro-batch
-MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-65536}"  # vLLM 每批最大 token 预算
-RAY_CPUS="${RAY_CPUS:-64}"             # Ray 初始化 CPU 配额
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.8}"    # vLLM 可使用的 GPU 显存比例
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"  # 默认使用 8 张 GPU
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-65536}"
+RAY_CPUS="${RAY_CPUS:-64}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.8}"
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 N_GPUS="${N_GPUS:-8}"
 TP_SIZE="${TP_SIZE:-2}"
 ORACLE_REWARD="${ORACLE_REWARD:-0}"
@@ -50,9 +40,11 @@ MINES="${MINES:-5}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VPR_GAMES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$VPR_GAMES_DIR/../.." && pwd)"
+source "$VPR_GAMES_DIR/launcher_utils.sh"
 DATA_DIR="$VPR_GAMES_DIR/data/vpr_minesweeper"
 TS="$(date +%Y%m%dT%H%M%S)"
-RUN_DIR="${RUN_DIR:-$(pwd)/runs/$TS}"
+RUN_DIR="${RUN_DIR:-$REPO_ROOT/runs/$TS}"
 mkdir -p "$RUN_DIR" "$RUN_DIR/ckpt" "$RUN_DIR/tensorboard"
 LOG_FILE="$RUN_DIR/train.log"
 
@@ -63,8 +55,13 @@ echo "Reward: outcome only | oracle_process: $ORACLE_REWARD/$ORACLE_FLAG_REWARD/
 echo "Run dir:      $RUN_DIR"
 echo "Resume:       mode=$RESUME_MODE path=${RESUME_FROM_PATH:-auto/latest-or-none}"
 
+vpr_validate_launcher
+if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY RUN: configuration validated; training was not started."
+    exit 0
+fi
 if [ ! -d "$MODEL_PATH" ]; then echo "ERROR: Model not found at $MODEL_PATH" >&2; exit 1; fi
-if [ ! -x "$PYTHON" ]; then echo "ERROR: Python not found at $PYTHON" >&2; exit 1; fi
+if ! command -v "$PYTHON" >/dev/null 2>&1 && [ ! -x "$PYTHON" ]; then echo "ERROR: Python not found: $PYTHON" >&2; exit 1; fi
 if [ "$RESUME_MODE" = "resume_path" ] && [ -z "$RESUME_FROM_PATH" ]; then
     echo "ERROR: RESUME_FROM_PATH is required when RESUME_MODE=resume_path" >&2
     exit 1

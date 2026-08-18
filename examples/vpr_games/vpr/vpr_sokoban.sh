@@ -1,16 +1,16 @@
 #!/bin/bash
 # ============================================================================
-# Sokoban —— VPR（逐-turn 最短路径 oracle reward + VPR advantage）训练脚本
 # ============================================================================
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-/mnt/project_rlinf/yuanhuining/models/Qwen3-4B}"
-PYTHON="${PYTHON:-/opt/venv/verl-agent/bin/python}"
+MODEL_PATH="${MODEL_PATH:-}"
+PYTHON="${PYTHON:-python}"
+DRY_RUN="${DRY_RUN:-0}"
 TRAIN_STEPS="${TRAIN_STEPS:-100}"
 TRAIN_BATCH="${TRAIN_BATCH:-64}"
 ROLLOUT_N="${ROLLOUT_N:-4}"
 ROLLOUT_MODE="${ROLLOUT_MODE:-state_group}"
-SELECTION_MODE="${SELECTION_MODE:-mixed}"
+SELECTION_MODE="${SELECTION_MODE:-best}"
 RANDOM_SELECT_PROB="${RANDOM_SELECT_PROB:-0}"
 VAL_BATCH="${VAL_BATCH:-64}"
 PPO_MINI_BATCH="${PPO_MINI_BATCH:-32}"
@@ -44,9 +44,11 @@ TP_SIZE="${TP_SIZE:-2}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VPR_GAMES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$VPR_GAMES_DIR/../.." && pwd)"
+source "$VPR_GAMES_DIR/launcher_utils.sh"
 DATA_DIR="$VPR_GAMES_DIR/data/vpr_sokoban"
 TS="$(date +%Y%m%dT%H%M%S)"
-RUN_DIR="${RUN_DIR:-$(pwd)/runs/$TS}"
+RUN_DIR="${RUN_DIR:-$REPO_ROOT/runs/$TS}"
 mkdir -p "$RUN_DIR" "$RUN_DIR/ckpt" "$RUN_DIR/tensorboard"
 LOG_FILE="$RUN_DIR/train.log"
 
@@ -58,8 +60,13 @@ echo "Sokoban:      dim_room:[$DIM_ROOM] | boxes:$NUM_BOXES | search_depth:$SEAR
 echo "Run dir:      $RUN_DIR"
 echo "Resume:       mode=$RESUME_MODE path=${RESUME_FROM_PATH:-auto/latest-or-none}"
 
+vpr_validate_launcher
+if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY RUN: configuration validated; training was not started."
+    exit 0
+fi
 if [ ! -d "$MODEL_PATH" ]; then echo "ERROR: Model not found at $MODEL_PATH" >&2; exit 1; fi
-if [ ! -x "$PYTHON" ]; then echo "ERROR: Python not found at $PYTHON" >&2; exit 1; fi
+if ! command -v "$PYTHON" >/dev/null 2>&1 && [ ! -x "$PYTHON" ]; then echo "ERROR: Python not found: $PYTHON" >&2; exit 1; fi
 if [ "$RESUME_MODE" = "resume_path" ] && [ -z "$RESUME_FROM_PATH" ]; then
     echo "ERROR: RESUME_FROM_PATH is required when RESUME_MODE=resume_path" >&2
     exit 1

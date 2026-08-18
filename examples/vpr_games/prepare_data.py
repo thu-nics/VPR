@@ -6,7 +6,6 @@ corresponds to one episode in the training batch.
 """
 
 import argparse
-import os
 from pathlib import Path
 
 

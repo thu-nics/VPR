@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT = Path(__file__).parents[2] / "examples" / "vpr_games" / "summarize_in_domain_eval.py"
+SCRIPT = Path(__file__).parents[2] / "examples" / "vpr_games" / "eval" / "summarize_in_domain_eval.py"
 
 
 def write_result(run_dir: Path, seed: int, success_rate: float) -> None:

@@ -4,9 +4,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-PYTHON="${PYTHON:-/opt/venv/verl-agent/bin/python}"
+PYTHON="${PYTHON:-python}"
 MODEL_PATH="${MODEL_PATH:-${BASE_MODEL_PATH:-}}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%S)"
+
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$@"
+    else
+        shasum -a 256 "$@"
+    fi
+}
 
 if [[ -n "${RUN_DIR:-}" && -n "${EVAL_ROOT:-}" && "$RUN_DIR" != "$EVAL_ROOT" ]]; then
     echo "ERROR: RUN_DIR and deprecated EVAL_ROOT point to different directories" >&2
@@ -39,18 +47,18 @@ MODEL_FILTER="${MODEL_FILTER:-}"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE="${FORCE:-0}"
 
-VPR_SOKOBAN_CKPT="${VPR_SOKOBAN_CKPT:-runs/20260703T043131/ckpt/global_step_100}"
-GRPO_SOKOBAN_CKPT="${GRPO_SOKOBAN_CKPT:-runs/20260703T170651/ckpt/global_step_100}"
-VINEPPO_SOKOBAN_CKPT="${VINEPPO_SOKOBAN_CKPT:-runs/20260713T182939/ckpt/global_step_50}"
-VANILLA_SOKOBAN_CKPT="${VANILLA_SOKOBAN_CKPT:-runs/20260708T031237/ckpt/global_step_100}"
-VPR_SUDOKU_CKPT="${VPR_SUDOKU_CKPT:-runs/20260706T170113/ckpt/global_step_60}"
-GRPO_SUDOKU_CKPT="${GRPO_SUDOKU_CKPT:-runs/20260702T174140/ckpt/global_step_100}"
-VINEPPO_SUDOKU_CKPT="${VINEPPO_SUDOKU_CKPT:-runs/20260714T061405/ckpt/global_step_50}"
-VPR_MINESWEEPER_CKPT="${VPR_MINESWEEPER_CKPT:-runs/20260627T093616/ckpt/global_step_200}"
-GRPO_MINESWEEPER_CKPT="${GRPO_MINESWEEPER_CKPT:-runs/20260630T171610/ckpt/global_step_200}"
-VINEPPO_MINESWEEPER_CKPT="${VINEPPO_MINESWEEPER_CKPT:-runs/20260713T183016/ckpt/global_step_100}"
-NOISE20_CKPT="${NOISE20_CKPT:-runs/20260709T032104/ckpt/global_step_100}"
-NOISE40_CKPT="${NOISE40_CKPT:-runs/20260711T161325/ckpt/global_step_100}"
+VPR_SOKOBAN_CKPT="${VPR_SOKOBAN_CKPT:-}"
+GRPO_SOKOBAN_CKPT="${GRPO_SOKOBAN_CKPT:-}"
+VINEPPO_SOKOBAN_CKPT="${VINEPPO_SOKOBAN_CKPT:-}"
+VANILLA_SOKOBAN_CKPT="${VANILLA_SOKOBAN_CKPT:-}"
+VPR_SUDOKU_CKPT="${VPR_SUDOKU_CKPT:-}"
+GRPO_SUDOKU_CKPT="${GRPO_SUDOKU_CKPT:-}"
+VINEPPO_SUDOKU_CKPT="${VINEPPO_SUDOKU_CKPT:-}"
+VPR_MINESWEEPER_CKPT="${VPR_MINESWEEPER_CKPT:-}"
+GRPO_MINESWEEPER_CKPT="${GRPO_MINESWEEPER_CKPT:-}"
+VINEPPO_MINESWEEPER_CKPT="${VINEPPO_MINESWEEPER_CKPT:-}"
+NOISE20_CKPT="${NOISE20_CKPT:-}"
+NOISE40_CKPT="${NOISE40_CKPT:-}"
 
 SOKOBAN_DIM_ROOM="${SOKOBAN_DIM_ROOM:-7,7}"
 SOKOBAN_NUM_BOXES="${SOKOBAN_NUM_BOXES:-3}"
@@ -67,11 +75,11 @@ MINESWEEPER_MINES="${MINESWEEPER_MINES:-5}"
 MINESWEEPER_MAX_STEPS="${MINESWEEPER_MAX_STEPS:-25}"
 MINESWEEPER_INVALID_PENALTY="${MINESWEEPER_INVALID_PENALTY:--2}"
 
-if [[ ! -x "$PYTHON" ]]; then
+if [[ "$DRY_RUN" != 1 ]] && ! command -v "$PYTHON" >/dev/null 2>&1 && [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: Python not found: $PYTHON" >&2
     exit 1
 fi
-if [[ -z "$MODEL_PATH" || ! -d "$MODEL_PATH" ]]; then
+if [[ -z "$MODEL_PATH" || ( "$DRY_RUN" != 1 && ! -d "$MODEL_PATH" ) ]]; then
     echo "ERROR: set MODEL_PATH to the base Hugging Face model directory" >&2
     exit 1
 fi
@@ -89,10 +97,12 @@ if [[ -n "$GENERATION_SEED" && "$GENERATION_SEED" != "env" && ! "$GENERATION_SEE
 fi
 
 mkdir -p "$RUN_DIR"
-exec 9>"$RUN_DIR/.eval.lock"
-if ! flock -n 9; then
-    echo "ERROR: another evaluator is using $RUN_DIR" >&2
-    exit 1
+if [[ "$DRY_RUN" != 1 ]]; then
+    exec 9>"$RUN_DIR/.eval.lock"
+    if ! flock -n 9; then
+        echo "ERROR: another evaluator is using $RUN_DIR" >&2
+        exit 1
+    fi
 fi
 
 contains_word() {
@@ -112,19 +122,23 @@ abspath() {
 
 declare -a JOBS=(
     "sokoban|qwen3_4b_base|BASE"
-    "sokoban|vpr_sokoban|$VPR_SOKOBAN_CKPT"
-    "sokoban|grpo_sokoban|$GRPO_SOKOBAN_CKPT"
-    "sokoban|vineppo_sokoban|$VINEPPO_SOKOBAN_CKPT"
-    "sokoban|vpr_sokoban_vanilla|$VANILLA_SOKOBAN_CKPT"
     "sudoku|qwen3_4b_base|BASE"
-    "sudoku|vpr_sudoku|$VPR_SUDOKU_CKPT"
-    "sudoku|grpo_sudoku|$GRPO_SUDOKU_CKPT"
-    "sudoku|vineppo_sudoku|$VINEPPO_SUDOKU_CKPT"
     "minesweeper|qwen3_4b_base|BASE"
-    "minesweeper|vpr_minesweeper|$VPR_MINESWEEPER_CKPT"
-    "minesweeper|grpo_minesweeper|$GRPO_MINESWEEPER_CKPT"
-    "minesweeper|vineppo_minesweeper|$VINEPPO_MINESWEEPER_CKPT"
 )
+add_checkpoint_job() {
+    local task="$1" model_id="$2" checkpoint="$3"
+    [[ -z "$checkpoint" ]] || JOBS+=("$task|$model_id|$checkpoint")
+}
+add_checkpoint_job sokoban vpr_sokoban "$VPR_SOKOBAN_CKPT"
+add_checkpoint_job sokoban grpo_sokoban "$GRPO_SOKOBAN_CKPT"
+add_checkpoint_job sokoban vineppo_sokoban "$VINEPPO_SOKOBAN_CKPT"
+add_checkpoint_job sokoban vpr_sokoban_vanilla "$VANILLA_SOKOBAN_CKPT"
+add_checkpoint_job sudoku vpr_sudoku "$VPR_SUDOKU_CKPT"
+add_checkpoint_job sudoku grpo_sudoku "$GRPO_SUDOKU_CKPT"
+add_checkpoint_job sudoku vineppo_sudoku "$VINEPPO_SUDOKU_CKPT"
+add_checkpoint_job minesweeper vpr_minesweeper "$VPR_MINESWEEPER_CKPT"
+add_checkpoint_job minesweeper grpo_minesweeper "$GRPO_MINESWEEPER_CKPT"
+add_checkpoint_job minesweeper vineppo_minesweeper "$VINEPPO_MINESWEEPER_CKPT"
 if [[ -n "$NOISE20_CKPT" ]]; then
     JOBS+=("sokoban|vpr_sokoban_noise20|$NOISE20_CKPT")
 else
@@ -183,7 +197,7 @@ write_protocol() {
     else
         mv "$candidate" "$RUN_DIR/protocol.env"
     fi
-    PROTOCOL_SHA256="$(sha256sum "$RUN_DIR/protocol.env" | awk '{print $1}')"
+    PROTOCOL_SHA256="$(sha256 "$RUN_DIR/protocol.env" | awk '{print $1}')"
     printf '%s  protocol.env\n' "$PROTOCOL_SHA256" > "$RUN_DIR/protocol.sha256"
     export PROTOCOL_SHA256
 }
@@ -213,6 +227,10 @@ write_source_metadata() {
 prepare_eval_data() {
     local task="$1"
     local data_dir="$RUN_DIR/data/$task"
+    if [[ "$DRY_RUN" == 1 ]]; then
+        echo "DRY RUN: would prepare $VAL_GAMES validation instances for $task"
+        return
+    fi
     mkdir -p "$data_dir"
     "$PYTHON" "$REPO_ROOT/examples/vpr_games/prepare_data.py" \
         --env-name "vpr_$task" \
@@ -223,10 +241,10 @@ prepare_eval_data() {
 
 append_task_overrides() {
     local task="$1"
-    local -n args_ref="$2"
+    TASK_OVERRIDES=()
     case "$task" in
         sokoban)
-            args_ref+=(
+            TASK_OVERRIDES+=(
                 "env.max_steps=$SOKOBAN_MAX_STEPS"
                 "env.invalid_penalty=$SOKOBAN_INVALID_PENALTY"
                 "env.sokoban.dim_room=[$SOKOBAN_DIM_ROOM]"
@@ -236,7 +254,7 @@ append_task_overrides() {
             )
             ;;
         sudoku)
-            args_ref+=(
+            TASK_OVERRIDES+=(
                 "env.max_steps=$SUDOKU_MAX_STEPS"
                 "env.invalid_penalty=$SUDOKU_INVALID_PENALTY"
                 "env.sudoku.n=$SUDOKU_N"
@@ -246,7 +264,7 @@ append_task_overrides() {
             )
             ;;
         minesweeper)
-            args_ref+=(
+            TASK_OVERRIDES+=(
                 "env.max_steps=$MINESWEEPER_MAX_STEPS"
                 "env.invalid_penalty=$MINESWEEPER_INVALID_PENALTY"
                 "env.minesweeper.rows=$MINESWEEPER_ROWS"
@@ -376,7 +394,8 @@ run_one() {
     elif [[ -n "$GENERATION_SEED" ]]; then
         cmd+=("actor_rollout_ref.rollout.val_kwargs.seed=$GENERATION_SEED")
     fi
-    append_task_overrides "$task" cmd
+    append_task_overrides "$task"
+    cmd+=("${TASK_OVERRIDES[@]}")
 
     echo "RUN: $task / $model_id / $eval_id"
     if [[ "$DRY_RUN" == 1 ]]; then
@@ -419,14 +438,14 @@ echo "Sampling:      thinking=$ENABLE_THINKING temperature=$TEMPERATURE top_p=$T
 echo "GPU:           CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES n_gpus=$N_GPUS tp=$TP_SIZE"
 echo "Protocol:      $PROTOCOL_SHA256"
 
-declare -A prepared_tasks=()
+prepared_tasks="|"
 for job in "${JOBS[@]}"; do
     IFS='|' read -r task model_id checkpoint_spec <<< "$job"
     contains_word "$TASK_FILTER" "$task" || continue
     contains_word "$MODEL_FILTER" "$model_id" || continue
-    if [[ -z "${prepared_tasks[$task]:-}" ]]; then
+    if [[ "$prepared_tasks" != *"|$task|"* ]]; then
         prepare_eval_data "$task"
-        prepared_tasks[$task]=1
+        prepared_tasks="${prepared_tasks}${task}|"
     fi
     for env_seed in $ENV_SEEDS; do
         run_one "$task" "$model_id" "$checkpoint_spec" "$env_seed"

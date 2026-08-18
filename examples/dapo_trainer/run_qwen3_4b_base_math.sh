@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 PYTHON="${PYTHON:-python}"
-MODEL_PATH="${MODEL_PATH:-$REPO_ROOT/.cache/model_tests/Qwen3-4B-Base}"
+MODEL_PATH="${MODEL_PATH:-}"
 DAPO_SOURCE_TRAIN="${DAPO_SOURCE_TRAIN:-$REPO_ROOT/.cache/model_tests/dapo-math-17k.parquet}"
 DAPO_SOURCE_VAL="${DAPO_SOURCE_VAL:-$REPO_ROOT/data/dapo/aime-2024.parquet}"
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/data/dapo}"
@@ -14,7 +14,7 @@ VAL_FILE="${VAL_FILE:-$DATA_DIR/aime-2024-unique.parquet}"
 RUN_NAME="${RUN_NAME:-dapo_qwen3_4b_base}"
 RUN_DIR="${RUN_DIR:-$REPO_ROOT/runs/${RUN_NAME}_$(date -u +%Y%m%dT%H%M%S)}"
 
-TRAIN_STEPS="${TRAIN_STEPS:-300}"
+TRAIN_STEPS="${TRAIN_STEPS:-100}"
 SAVE_FREQ="${SAVE_FREQ:-25}"
 TEST_FREQ="${TEST_FREQ:-25}"
 TRAIN_BATCH="${TRAIN_BATCH:-64}"
@@ -38,6 +38,7 @@ RAY_CPUS="${RAY_CPUS:-64}"
 RESUME_MODE="${RESUME_MODE:-auto}"
 RESUME_FROM_PATH="${RESUME_FROM_PATH:-}"
 SMOKE="${SMOKE:-0}"
+DRY_RUN="${DRY_RUN:-0}"
 
 if [[ "$SMOKE" == "1" ]]; then
     RUN_NAME="${RUN_NAME:-dapo_qwen3_4b_base_smoke}"
@@ -55,6 +56,15 @@ if [[ "$SMOKE" == "1" ]]; then
     RESUME_MODE=disable
 fi
 
+if [[ -z "$MODEL_PATH" ]]; then
+    echo "ERROR: MODEL_PATH is required" >&2
+    exit 1
+fi
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "DRY RUN: math-only DAPO"
+    echo "Model: $MODEL_PATH | initial task prompts: $TRAIN_BATCH | responses per prompt: $ROLLOUT_N | steps: $TRAIN_STEPS"
+    exit 0
+fi
 if ! command -v "$PYTHON" >/dev/null 2>&1 && [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: Python executable not found: $PYTHON" >&2
     exit 1

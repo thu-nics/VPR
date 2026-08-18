@@ -13,4 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from agent_system.environments.env_manager import EnvironmentManagerBase, make_envs
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent_system.environments.env_manager import EnvironmentManagerBase, make_envs
+
+__all__ = ["EnvironmentManagerBase", "make_envs"]
+
+
+def __getattr__(name):
+    """Load the environment manager only when its public symbols are requested.
+
+    Parsers, oracles, and action validators remain importable in lightweight CPU
+    environments that do not install the full Torch/Ray training stack.
+    """
+    if name in __all__:
+        from agent_system.environments.env_manager import EnvironmentManagerBase, make_envs
+
+        return {"EnvironmentManagerBase": EnvironmentManagerBase, "make_envs": make_envs}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -13,11 +13,12 @@ pyarrow>=19.0.0
 pybind11
 pylatexenc
 pre-commit
-ray[default]
-tensordict<=0.6.2
+ray[default]>=2.41.0,<=2.50.0
+tensordict>=0.8.0,<=0.10.0,!=0.9.0
 torchdata
-transformers==4.51.1
-# vllm==0.8.4
+transformers<=4.57.3
+# Install vLLM through `pip install -e ".[vllm]"` so its Torch-compatible
+# wheel can be selected for the target CUDA platform.
 wandb
 packaging>=20.0
 uvicorn

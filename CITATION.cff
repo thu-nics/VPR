@@ -1,0 +1,50 @@
+cff-version: 1.2.0
+message: "If you use VPR, please cite the paper below."
+title: "Verifiable Process Rewards for Agentic Reasoning"
+type: software
+authors:
+  - given-names: Huining
+    family-names: Yuan
+  - given-names: Zelai
+    family-names: Xu
+  - given-names: Huaijie
+    family-names: Wang
+  - given-names: Xiangmin
+    family-names: Yi
+  - given-names: Jiaxuan
+    family-names: Gao
+  - given-names: Xiao-Ping
+    family-names: Zhang
+  - given-names: Yu
+    family-names: Wang
+  - given-names: Chao
+    family-names: Yu
+  - given-names: Yi
+    family-names: Wu
+repository-code: "https://github.com/thu-nics/VPR"
+url: "https://thu-nics.github.io/VPR/"
+license: Apache-2.0
+preferred-citation:
+  type: article
+  title: "Verifiable Process Rewards for Agentic Reasoning"
+  authors:
+    - given-names: Huining
+      family-names: Yuan
+    - given-names: Zelai
+      family-names: Xu
+    - given-names: Huaijie
+      family-names: Wang
+    - given-names: Xiangmin
+      family-names: Yi
+    - given-names: Jiaxuan
+      family-names: Gao
+    - given-names: Xiao-Ping
+      family-names: Zhang
+    - given-names: Yu
+      family-names: Wang
+    - given-names: Chao
+      family-names: Yu
+    - given-names: Yi
+      family-names: Wu
+  year: 2026
+  url: "https://arxiv.org/abs/2605.10325"

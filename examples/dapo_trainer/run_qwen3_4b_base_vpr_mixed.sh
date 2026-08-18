@@ -9,7 +9,7 @@ TRAINING_VARIANT="${TRAINING_VARIANT:-VPR state-group}"
 PROJECT_NAME="${PROJECT_NAME:-dapo-vpr-mixed}"
 
 PYTHON="${PYTHON:-python}"
-MODEL_PATH="${MODEL_PATH:-$REPO_ROOT/.cache/model_tests/Qwen3-4B-Base}"
+MODEL_PATH="${MODEL_PATH:-}"
 DAPO_TRAIN="${DAPO_TRAIN:-$REPO_ROOT/data/dapo/dapo-math-17k-unique.parquet}"
 DAPO_VAL="${DAPO_VAL:-$REPO_ROOT/data/dapo/aime-2024-unique.parquet}"
 RUN_NAME="${RUN_NAME:-dapo_vpr_mixed_base_math8_games4_6_8_18_boxed}"
@@ -59,6 +59,7 @@ RAY_CPUS="${RAY_CPUS:-64}"
 RESUME_MODE="${RESUME_MODE:-disable}"
 RESUME_FROM_PATH="${RESUME_FROM_PATH:-}"
 SMOKE="${SMOKE:-0}"
+DRY_RUN="${DRY_RUN:-0}"
 
 if [[ "$SMOKE" == "1" ]]; then
     TRAIN_STEPS=1
@@ -134,6 +135,21 @@ fi
 if [[ "$RESUME_MODE" == "resume_path" && -z "$RESUME_FROM_PATH" ]]; then
     echo "ERROR: RESUME_FROM_PATH is required when RESUME_MODE=resume_path" >&2
     exit 1
+fi
+if [[ -z "$MODEL_PATH" ]]; then
+    echo "ERROR: MODEL_PATH is required" >&2
+    exit 1
+fi
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "DRY RUN: $TRAINING_VARIANT"
+    echo "Initial task instances: math=$MATH_TRAJ sokoban=$SOKOBAN_TRAJ sudoku=$SUDOKU_TRAJ minesweeper=$MINESWEEPER_TRAJ"
+    if [[ "$CONFIG_NAME" == "dapo_vpr_mixed" ]]; then
+        echo "Candidate counts: math=$MATH_ROLLOUT_N per prompt; games=$GAME_ROLLOUT_N per visited state"
+    else
+        echo "Trajectory-group size: $ROLLOUT_N complete trajectories per prompt"
+    fi
+    echo "Model: $MODEL_PATH | steps: $TRAIN_STEPS | GPUs: $N_GPUS"
+    exit 0
 fi
 if ! command -v "$PYTHON" >/dev/null 2>&1 && [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: Python executable not found: $PYTHON" >&2

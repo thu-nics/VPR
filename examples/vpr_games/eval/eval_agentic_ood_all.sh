@@ -2,6 +2,14 @@
 # Evaluate an arbitrary model manifest on ALFWorld OOD and WebShop test.
 set -euo pipefail
 
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$@"
+    else
+        shasum -a 256 "$@"
+    fi
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%S)"
@@ -9,7 +17,7 @@ RUN_ID="$(date -u +%Y%m%dT%H%M%S)"
 MODEL_MANIFEST="${MODEL_MANIFEST:-}"
 RUN_DIR="${RUN_DIR:-$REPO_ROOT/runs/eval_agentic_ood_$RUN_ID}"
 MODEL_CACHE_ROOT="${MODEL_CACHE_ROOT:-$REPO_ROOT/runs/eval_model_cache}"
-PYTHON="${PYTHON:-${PYTHON_BIN:-/opt/venv/verl-agent/bin/python}}"
+PYTHON="${PYTHON:-${PYTHON_BIN:-python}}"
 JAVA_HOME="${JAVA_HOME:-$REPO_ROOT/data/agentic_eval/java11}"
 JVM_PATH="${JVM_PATH:-$JAVA_HOME/lib/server/libjvm.so}"
 
@@ -52,7 +60,7 @@ WEBSHOP_HISTORY_LENGTH="${WEBSHOP_HISTORY_LENGTH:-2}"
 
 TASK_FILTER="${TASK_FILTER:-}"
 MODEL_FILTER="${MODEL_FILTER:-}"
-ACTION_FORMATS="${ACTION_FORMATS:-action_tag boxed}"
+ACTION_FORMATS="${ACTION_FORMATS:-boxed}"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE="${FORCE:-0}"
 SKIP_DATA_CHECK="${SKIP_DATA_CHECK:-0}"
@@ -81,8 +89,8 @@ prompt_rendering:
 Defaults:
   ALFWorld: valid_unseen, all 134 tasks, 5 sampling seeds, max 50 steps.
   WebShop:  full 500-task test split, 3 sampling seeds, max 30 steps.
-  Prompt:    stock prompts without the think-tag requirement; evaluate both
-             <action>...</action> and \boxed{ACTION} wrappers.
+  Prompt:    stock prompts without the think-tag requirement; use the paper's
+             boxed action wrapper by default.
   Sampling:  16K prompt / 8K response / 32K context, middle-truncate
              overlong prompts, no format stop,
              temperature=0.6, top_p=0.95, top_k=20.
@@ -121,6 +129,20 @@ abspath() {
         printf '%s\n' "$REPO_ROOT/$path"
     fi
 }
+
+model_file_metadata() {
+    local directory="$1" file name size mtime
+    find "$directory" -maxdepth 1 -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+        name="$(basename "$file")"
+        case "$name" in
+            model* | *.bin | config.json | generation_config.json | tokenizer* | special_tokens_map.json | chat_template* | merges.txt | vocab.json | added_tokens.json) ;;
+            *) continue ;;
+        esac
+        size="$(wc -c < "$file" | tr -d ' ')"
+        mtime="$(stat -f '%m' "$file" 2>/dev/null || stat -c '%Y' "$file")"
+        printf '%s|%s|%s\n' "$name" "$size" "$mtime"
+    done
+}
 RUN_DIR="$(abspath "$RUN_DIR")"
 MODEL_CACHE_ROOT="$(abspath "$MODEL_CACHE_ROOT")"
 COMPILE_CACHE_ROOT="${COMPILE_CACHE_ROOT:-$RUN_DIR/compile_cache/n${N_GPUS}_tp${TP_SIZE}}"
@@ -145,12 +167,12 @@ trap cleanup EXIT
 }
 MODEL_MANIFEST="$(abspath "$MODEL_MANIFEST")"
 [[ -f "$MODEL_MANIFEST" ]] || die "model manifest not found: $MODEL_MANIFEST"
-[[ -x "$PYTHON" ]] || die "Python not found: $PYTHON"
+command -v "$PYTHON" >/dev/null 2>&1 || [[ -x "$PYTHON" ]] || die "Python not found: $PYTHON"
 [[ "$N_GPUS" =~ ^[1-9][0-9]*$ ]] || die "N_GPUS must be positive"
 [[ "$TP_SIZE" =~ ^[1-9][0-9]*$ ]] || die "TP_SIZE must be positive"
-case "${ENABLE_THINKING,,}" in
-    true | 1 | yes) ENABLE_THINKING=true ;;
-    false | 0 | no) ENABLE_THINKING=false ;;
+case "$ENABLE_THINKING" in
+    true | True | TRUE | 1 | yes | Yes | YES) ENABLE_THINKING=true ;;
+    false | False | FALSE | 0 | no | No | NO) ENABLE_THINKING=false ;;
     *) die "ENABLE_THINKING must be true or false" ;;
 esac
 [[ "$MAX_PROMPT_LENGTH" =~ ^[1-9][0-9]*$ ]] || die "MAX_PROMPT_LENGTH must be positive"
@@ -230,13 +252,11 @@ source_identity() {
         printf 'source_type=%s\n' "$source_type"
         printf 'source_path=%s\n' "$(realpath "$source_path")"
         if [[ "$source_type" == verl_fsdp ]]; then
-            printf 'model_merger_sha256=%s\n' "$(sha256sum "$REPO_ROOT/scripts/model_merger.py" | awk '{print $1}')"
+            printf 'model_merger_sha256=%s\n' "$(sha256 "$REPO_ROOT/scripts/model_merger.py" | awk '{print $1}')"
             scan_path="$source_path/actor"
-            find "$scan_path" -maxdepth 1 -type f -regextype posix-extended -regex '.*/(model_world_size_[^/]+|config[.]json|generation_config[.]json|tokenizer[^/]*|special_tokens_map[.]json|chat_template[^/]*|merges[.]txt|vocab[.]json|added_tokens[.]json)' -print0 | sort -z | xargs -0 -r stat -c '%n|%s|%y'
-        else
-            find "$scan_path" -maxdepth 1 -type f -regextype posix-extended -regex '.*/(model.*[.]safetensors.*|.*[.]bin|config[.]json|generation_config[.]json|tokenizer[^/]*|special_tokens_map[.]json|chat_template[^/]*|merges[.]txt|vocab[.]json|added_tokens[.]json)' -print0 | sort -z | xargs -0 -r stat -c '%n|%s|%y'
         fi
-    } | sha256sum | awk '{print $1}'
+        model_file_metadata "$scan_path"
+    } | sha256 | awk '{print $1}'
 }
 
 prepare_model() {
@@ -335,7 +355,7 @@ write_protocol() {
         printf 'JAVA_HOME=%s\n' "$JAVA_HOME"
         printf 'JVM_PATH=%s\n' "$JVM_PATH"
         printf 'GIT_REVISION=%s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
-        printf 'EVALUATOR_SHA256=%s\n' "$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')"
+        printf 'EVALUATOR_SHA256=%s\n' "$(sha256 "${BASH_SOURCE[0]}" | awk '{print $1}')"
         printf 'SAMPLING=temperature:%s,top_p:%s,top_k:%s,min_p:%s\n' "$TEMPERATURE" "$TOP_P" "$TOP_K" "$MIN_P"
         echo "CHAT_TEMPLATE=enable_thinking:$ENABLE_THINKING"
         printf 'ACTION_PROTOCOL=stock_without_think_requirement;wrappers:%s;strict_admissible:true,format_stop:none\n' "$ACTION_FORMATS"
@@ -358,7 +378,7 @@ write_protocol() {
     else
         mv "$candidate" "$RUN_DIR/protocol.env"
     fi
-    PROTOCOL_SHA256="$(sha256sum "$RUN_DIR/protocol.env" | awk '{print $1}')"
+    PROTOCOL_SHA256="$(sha256 "$RUN_DIR/protocol.env" | awk '{print $1}')"
     printf '%s  protocol.env\n' "$PROTOCOL_SHA256" > "$RUN_DIR/protocol.sha256"
     export PROTOCOL_SHA256
 }
@@ -384,15 +404,19 @@ prepare_eval_data() {
     local task="$1"
     local count="$2"
     local data_dir="$RUN_DIR/data/$task"
+    if [[ "$DRY_RUN" == 1 ]]; then
+        log "DRY RUN: would prepare $count validation instances for $task"
+        return
+    fi
     mkdir -p "$data_dir"
     "$PYTHON" "$REPO_ROOT/examples/vpr_games/prepare_data.py" --env-name "$task" --train-size "$N_GPUS" --val-size "$count" --output-dir "$data_dir"
 }
 
 append_task_overrides() {
     local task="$1"
-    local -n args_ref="$2"
+    TASK_OVERRIDES=()
     if [[ "$task" == alfworld ]]; then
-        args_ref+=(
+        TASK_OVERRIDES+=(
             "env.env_name=alfworld/AlfredTWEnv"
             "env.max_steps=$ALFWORLD_MAX_STEPS"
             "env.history_length=$ALFWORLD_HISTORY_LENGTH"
@@ -400,7 +424,7 @@ append_task_overrides() {
             "env.alfworld.deterministic_eval=true"
         )
     else
-        args_ref+=(
+        TASK_OVERRIDES+=(
             "env.env_name=Webshop"
             "env.max_steps=$WEBSHOP_MAX_STEPS"
             "env.history_length=$WEBSHOP_HISTORY_LENGTH"
@@ -521,7 +545,8 @@ run_one() {
         "ray_init.num_cpus=$RAY_CPUS"
         "+ray_init._temp_dir=$RAY_TEMP_ROOT"
     )
-    append_task_overrides "$task" cmd
+    append_task_overrides "$task"
+    cmd+=("${TASK_OVERRIDES[@]}")
 
     log "Running $model_id/$action_format/$task/seed_$sample_seed ($val_count episodes, prompt=$prompt_rendering)"
     if [[ "$DRY_RUN" == 1 ]]; then
@@ -560,8 +585,10 @@ run_one() {
 }
 
 mkdir -p "$RUN_DIR"
-exec 9>"$RUN_DIR/.eval.lock"
-flock -n 9 || die "another evaluator is using RUN_DIR=$RUN_DIR"
+if [[ "$DRY_RUN" != 1 ]]; then
+    exec 9>"$RUN_DIR/.eval.lock"
+    flock -n 9 || die "another evaluator is using RUN_DIR=$RUN_DIR"
+fi
 
 write_protocol
 write_source_metadata "$@"

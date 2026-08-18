@@ -23,6 +23,7 @@ env:
     non_oracle_penalty: 0.0  # legal non-oracle reveal reward
     non_oracle_flag_penalty: -1.0
   rollout:
+    n: 4
     mode: state_group
     selection_mode: best
     random_select_prob: 0.0
@@ -35,4 +36,4 @@ algorithm:
   adv_estimator: vpr
   vpr:
     outcome_reward_scale: 0.0
-    state_group_advantage_mode: group_whiten
+    state_group_advantage_mode: mean_then_batch_whiten

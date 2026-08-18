@@ -8,7 +8,7 @@ These tests import the real make_envs() function and verify:
 - Minesweeper grouped reset identity
 
 Requires: Ray, Torch, GEM (skip without them).
-Run under /opt/venv/verl-agent/bin/python for full coverage.
+Run under python for full coverage.
 
 IMPORTANT: This file loads the real env_manager under a private alias so it is not
 affected by MagicMock stubs that test_envs.py injects into sys.modules. When pytest
@@ -16,8 +16,9 @@ collects all test files, module-level stubs from other files run first. Loading 
 a private key ("_real_env_manager") isolates this file from those stubs.
 """
 
-import sys
 import importlib.util
+import sys
+
 import pytest
 
 _ray_available = False
@@ -45,7 +46,7 @@ _can_run = _ray_available and _torch_available and _gem_available
 
 pytestmark = pytest.mark.skipif(
     not _can_run,
-    reason="Requires Ray, Torch, and GEM (run under /opt/venv/verl-agent/bin/python)",
+    reason="Requires Ray, Torch, and GEM (run under python)",
 )
 
 # Load the real env_manager under a private alias so test_envs.py's MagicMock stub
@@ -69,6 +70,7 @@ def _init_ray():
 
 def _make_config(env_name, train_batch_size=2, rollout_n=2, val_batch_size=1, seed=0):
     from types import SimpleNamespace
+
     from omegaconf import OmegaConf
     return SimpleNamespace(
         env=SimpleNamespace(
@@ -190,9 +192,7 @@ class TestMakeEnvsFactory:
 
     def test_minesweeper_grouped_reset_identity(self):
         """group_n=2 Minesweeper: both replicas share same initial state."""
-        from agent_system.environments.env_package.vpr_games.minesweeper.envs import (
-            build_minesweeper_envs
-        )
+        from agent_system.environments.env_package.vpr_games.minesweeper.envs import build_minesweeper_envs
         envs = build_minesweeper_envs(seed=0, env_num=1, group_n=2)
         obs_list, _ = envs.reset()
         assert obs_list[0] == obs_list[1], "Group replicas must start identically"

@@ -4,8 +4,9 @@
 # ============================================================================
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-/mnt/project_rlinf/yuanhuining/models/Qwen3-4B}"
-PYTHON="${PYTHON:-/opt/venv/verl-agent/bin/python}"
+MODEL_PATH="${MODEL_PATH:-}"
+PYTHON="${PYTHON:-python}"
+DRY_RUN="${DRY_RUN:-0}"
 TRAIN_STEPS="${TRAIN_STEPS:-100}"
 TRAIN_BATCH="${TRAIN_BATCH:-32}"
 ROLLOUT_N="${ROLLOUT_N:-8}"
@@ -34,9 +35,10 @@ INVALID_PENALTY="${INVALID_PENALTY:--1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VPR_GAMES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$VPR_GAMES_DIR/../.." && pwd)"
 DATA_DIR="$VPR_GAMES_DIR/data/vpr_tictactoe"
 TS="$(date +%Y%m%dT%H%M%S)"
-RUN_DIR="${RUN_DIR:-$(pwd)/runs/$TS}"
+RUN_DIR="${RUN_DIR:-$REPO_ROOT/runs/$TS}"
 mkdir -p "$RUN_DIR" "$RUN_DIR/ckpt" "$RUN_DIR/tensorboard"
 LOG_FILE="$RUN_DIR/train.log"
 
@@ -47,8 +49,13 @@ echo "Reward: outcome only | critic: turn-level TD-GAE | opponent: $OPPONENT | m
 echo "Run dir:      $RUN_DIR"
 echo "Resume:       mode=$RESUME_MODE path=${RESUME_FROM_PATH:-auto/latest-or-none}"
 
+if [ -z "$MODEL_PATH" ]; then echo "ERROR: MODEL_PATH is required" >&2; exit 1; fi
+if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY RUN: configuration validated; training was not started."
+    exit 0
+fi
 if [ ! -d "$MODEL_PATH" ]; then echo "ERROR: Model not found at $MODEL_PATH" >&2; exit 1; fi
-if [ ! -x "$PYTHON" ]; then echo "ERROR: Python not found at $PYTHON" >&2; exit 1; fi
+if ! command -v "$PYTHON" >/dev/null 2>&1 && [ ! -x "$PYTHON" ]; then echo "ERROR: Python not found: $PYTHON" >&2; exit 1; fi
 if [ "$RESUME_MODE" = "resume_path" ] && [ -z "$RESUME_FROM_PATH" ]; then
     echo "ERROR: RESUME_FROM_PATH is required when RESUME_MODE=resume_path" >&2
     exit 1

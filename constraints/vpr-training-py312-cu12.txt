@@ -1,0 +1,14 @@
+# Core versions from the validated VPR training server environment.
+# Python 3.12 / CUDA 12; select platform-compatible PyTorch and vLLM wheels.
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0
+vllm==0.11.0
+tensordict==0.10.0
+transformers==4.57.3
+ray==2.50.0
+numpy==2.2.6
+flash-attn==2.8.3.post1
+gym==0.26.2
+gym-sokoban==0.0.6
+gem-llm @ git+https://github.com/axon-rl/gem.git@e08db258810700fb14a3cd57833c8db8cf864a46

@@ -14,15 +14,15 @@
 # limitations under the License.
 
 import os
+import uuid
+from collections import Counter, defaultdict
+from difflib import SequenceMatcher
+from typing import Any, Dict, List
+
 import numpy as np
 import torch
-from collections import defaultdict, Counter
+
 from verl import DataProto
-import uuid
-
-from difflib import SequenceMatcher
-from typing import Sequence, List, Dict, Any
-
 
 """
 Core functions to implement the GiGPO algorithm (https://arxiv.org/abs/2505.10978).
@@ -63,13 +63,9 @@ def summarize_group_size(group_size: list):
         prop = cnt / total if total > 0 else 0
         summary[size] = (cnt, prop)
 
-    print("Summary of step-level group sizes:")
-    print("Size | Count | Proportion")
-    print("-------------------------")
-    for size, (cnt, prop) in summary.items():
-        if prop:
-            print(f"{size:>4} | {cnt:>5} | {prop:>9.2%}")
-            
+    return summary
+
+
 def are_similar(a: str, b: str, threshold: float = 0.95) -> bool:
     """
     Check whether two text observations are similar enough.
@@ -573,13 +569,13 @@ def build_step_group(anchor_obs: np.array, index: np.array, enable_similarity: b
                     step_group_uids[loc] = uid
 
         # Validate that all elements have been assigned a uid
-    if None in step_group_uids or np.any(step_group_uids == None):
-        missing_indices = np.where(step_group_uids == None)[0]
+    missing_mask = np.fromiter((uid is None for uid in step_group_uids), dtype=bool)
+    if missing_mask.any():
+        missing_indices = np.flatnonzero(missing_mask)
         raise ValueError(f"Failed to assign UIDs to all observations. Missing at indices: {missing_indices}")
 
     if summarize:
         summarize_group_size(group_size)
-    print(f"Avg size of step-level group: {np.mean(group_size)}")
     return step_group_uids
 
 
@@ -623,8 +619,6 @@ def step_norm_reward(step_rewards: torch.Tensor,
                 id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
                 id2std[idx] = torch.std(torch.tensor([id2score[idx]]))
             else:
-                print(f"id2score: {id2score}")
-                print(f"len(id2score[idx]): {len(id2score[idx])}")
                 raise ValueError(f"no score in prompt index: {idx}")
         for i in range(bsz):
             if remove_std:
@@ -1031,4 +1025,3 @@ def compute_vpr_turn_level_advantage(
 
     returns = token_advantages.clone()
     return token_advantages, returns
-

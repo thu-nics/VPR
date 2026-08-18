@@ -50,6 +50,11 @@ GEO_REQUIRES = ["mathruler"]
 GPU_REQUIRES = ["liger-kernel", "flash-attn"]
 MATH_REQUIRES = ["math-verify"]  # Add math-verify as an optional dependency
 VLLM_REQUIRES = ["tensordict>=0.8.0,<=0.10.0,!=0.9.0", "vllm>=0.8.5,<=0.11.0"]
+VPR_REQUIRES = [
+    "gem-llm @ git+https://github.com/axon-rl/gem.git@e08db258810700fb14a3cd57833c8db8cf864a46",
+    "gym-sokoban==0.0.6",
+]
+LEGACY_VPR_REQUIRES = ["open-spiel==2.0.1"]
 SGLANG_REQUIRES = [
     "tensordict>=0.8.0,<=0.10.0,!=0.9.0",
     "sglang[srt,openai]==0.5.5",
@@ -66,6 +71,8 @@ extras_require = {
     "gpu": GPU_REQUIRES,
     "math": MATH_REQUIRES,
     "vllm": VLLM_REQUIRES,
+    "vpr": VPR_REQUIRES,
+    "legacy-vpr": LEGACY_VPR_REQUIRES,
     "sglang": SGLANG_REQUIRES,
     "trl": TRL_REQUIRES,
     "mcore": MCORE_REQUIRES,
@@ -81,7 +88,7 @@ setup(
     version=__version__,
     package_dir={"": "."},
     packages=find_packages(where="."),
-    url="https://github.com/volcengine/verl",
+    url="https://github.com/thu-nics/VPR",
     license="Apache 2.0",
     author="Bytedance - Seed - MLSys",
     author_email="zhangchi.usc1992@bytedance.com, gmsheng@connect.hku.hk",

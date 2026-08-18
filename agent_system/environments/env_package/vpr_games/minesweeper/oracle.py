@@ -15,9 +15,9 @@ Falls back to local single-constraint deduction when the budget is exceeded.
 from __future__ import annotations
 
 import itertools
-from collections import defaultdict, deque
+from collections import defaultdict
 from math import comb
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 N_MAX_CONFIGS = 50_000
 

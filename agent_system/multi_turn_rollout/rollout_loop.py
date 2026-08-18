@@ -13,21 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Mapping
-import os
 import json as _json_rl
-import torch
+import os
+import uuid
+from collections.abc import Mapping
+from typing import Dict, List
+
 import numpy as np
+import torch
+from transformers import PreTrainedTokenizer
+
+import verl.utils.torch_functional as verl_F
+from agent_system.environments import EnvironmentManagerBase
+from agent_system.multi_turn_rollout.utils import filter_group_data, process_image, to_list_of_dict, torch_to_numpy
 from verl import DataProto
+from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from verl.utils.dataset.rl_dataset import collate_fn
 from verl.utils.model import compute_position_id_with_mask
-import verl.utils.torch_functional as verl_F
-from transformers import PreTrainedTokenizer
-import uuid
-from agent_system.multi_turn_rollout.utils import process_image, to_list_of_dict, torch_to_numpy, filter_group_data
-from agent_system.environments import EnvironmentManagerBase
-from typing import List, Dict
-from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 
 
 def _resolve_train_rollout_limits(config, infos):
@@ -315,7 +317,7 @@ class TrajectoryCollector:
         if obs_text is not None:
             obs_content += obs_text
         else:
-            print(f"Warning: No text observation found!")
+            print("Warning: No text observation found!")
 
         
         if obs_chat is None:
@@ -1727,7 +1729,7 @@ class TrajectoryCollector:
         else:
             if is_train:
                 gen_batch = gen_batch.repeat(repeat_times=self.config.env.rollout.n, interleave=True)
-            
+
             # Initial observations from the environment
             if self.config.algorithm.filter_groups.enable and is_train:
                 # Dynamic Sampling (for DAPO and Dynamic GiGPO)
@@ -1738,7 +1740,7 @@ class TrajectoryCollector:
                     envs=envs,
                 )
             else:
-                # Vanilla Sampling   
+                # Vanilla Sampling
                 total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings = \
                     self.vanilla_multi_turn_loop(
                     gen_batch=gen_batch,

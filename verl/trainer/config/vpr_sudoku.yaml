@@ -23,7 +23,8 @@ env:
     cell_error_penalty: -2.0
     reward_mode: oracle     # "oracle" (MRV/forced-cell imitation) or "outcome" (win/lose: solve=+1, wrong/invalid=-1)
   rollout:
-    mode: vanilla
+    n: 4
+    mode: state_group
     selection_mode: best
     random_select_prob: 0.0
   resources_per_worker:
@@ -34,4 +35,4 @@ algorithm:
   adv_estimator: vpr
   vpr:
     outcome_reward_scale: 0.0
-    state_group_advantage_mode: group_whiten
+    state_group_advantage_mode: mean_then_batch_whiten

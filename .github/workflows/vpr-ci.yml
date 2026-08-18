@@ -1,0 +1,70 @@
+name: VPR CPU checks
+
+on:
+  push:
+    branches: [main, master, "release/**"]
+  pull_request:
+
+jobs:
+  hygiene-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install lightweight test tools
+        run: python -m pip install --upgrade build pydantic pytest ruff setuptools wheel
+      - name: Build and inspect wheel
+        run: |
+          python -m build --wheel --no-isolation
+          python -m pip install --no-deps --force-reinstall dist/*.whl
+          python -c "import importlib.util, agent_system, gigpo; assert importlib.util.find_spec('verl') is not None"
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+          wheel = next(Path("dist").glob("*.whl"))
+          names = zipfile.ZipFile(wheel).namelist()
+          required = (
+              "agent_system/environments/env_package/vpr_games/",
+              "gigpo/core_gigpo.py",
+              "verl/trainer/config/vpr_sokoban.yaml",
+              "verl/trainer/config/tau_vpr.yaml",
+          )
+          missing = [item for item in required if not any(name.startswith(item) for name in names)]
+          assert not missing, f"wheel is missing: {missing}"
+          PY
+      - name: Python and shell syntax
+        run: |
+          python -m compileall -q \
+            agent_system/environments/env_package/vpr_games \
+            agent_system/environments/env_package/tau_bench \
+            examples/vpr_games examples/dapo_trainer examples/tau_bench gigpo
+          find examples/vpr_games examples/dapo_trainer examples/tau_bench \
+            -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: Focused lint
+        run: |
+          ruff check --select E9,F63,F7,F82 \
+            agent_system/environments/env_package/vpr_games/common/parser.py \
+            agent_system/environments/env_package/vpr_games/minesweeper/oracle.py \
+            agent_system/environments/env_package/tau_bench/actions.py \
+            examples/vpr_games/prepare_data.py \
+            examples/vpr_games/eval/summarize_in_domain_eval.py
+      - name: Lightweight CPU tests
+        run: |
+          python -m pytest \
+            tests/vpr_games/test_parser.py \
+            tests/vpr_games/test_posterior.py \
+            tests/vpr_games/test_eval_summary.py \
+            tests/tau_bench/test_actions.py -q
+      - name: Public-release path and secret scan
+        run: |
+          ! grep -R -n -E '/mnt/project_rlinf/yuanhuining|/opt/venv/verl-agent|/Users/yuanhuining' \
+            agent_system/environments/env_package/vpr_games \
+            agent_system/environments/env_package/tau_bench \
+            examples/vpr_games examples/dapo_trainer examples/tau_bench \
+            tests/vpr_games tests/tau_bench verl/trainer/config/vpr_*.yaml \
+            verl/trainer/config/dapo_*mixed.yaml verl/trainer/config/tau_*.yaml
+          ! grep -R -n -E -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' \
+            agent_system examples tests verl README.md docs

@@ -1,48 +1,40 @@
 #!/bin/bash
 # ============================================================================
-# Minesweeper —— VinePPO（逐-turn 过程奖励 + VinePPO advantage）训练脚本
 #
 #   * algorithm.adv_estimator=vineppo → MC continuation value baseline：
-#     A(s,a)=r+gamma*V(next_state)-V(state)，并在 batch 内归一化。
-#   * env.minesweeper.reward_mode 由 REWARD_MODE 控制，默认 outcome；可设 oracle 使用 turn-level imitation 奖励：
-#     safe reveal +2；certain flag +1；min-posterior guess +1；non-oracle reveal 0；non-oracle flag -1；invalid/truncate -2。
-#   * KL 正则：由 USE_KL 和 KL_COEF 控制。
 #
-# 本次配置（可用同名环境变量覆盖）：
-#   * thinking 模式、输出长度、训练步数、rollout 规模、验证规模均由下方环境变量控制。
-#   * 训练产物写入 RUN_DIR 下的日志、checkpoint、tensorboard 和 Hydra 配置目录。
 #
-# 依赖：需要 GEM（pip install 'git+https://github.com/axon-rl/gem.git'）。
 # ============================================================================
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-/mnt/project_rlinf/yuanhuining/models/Qwen3-4B}"
-PYTHON="${PYTHON:-/opt/venv/verl-agent/bin/python}"
-TRAIN_STEPS="${TRAIN_STEPS:-200}"       # 训练步数
-TRAIN_BATCH="${TRAIN_BATCH:-128}"         # 每个训练 step 的 prompt 数
-ROLLOUT_N="${ROLLOUT_N:-1}"            # vanilla 独立轨迹数
-VINE_K="${VINE_K:-5}"  # 每个 state 的 MC continuation 次数
-VINE_TRAIN_TRAJ="${VINE_TRAIN_TRAJ:-32}"  # null 表示训练所有采样轨迹；设为 32 时只对 32 条轨迹做 MC 和 actor loss
+MODEL_PATH="${MODEL_PATH:-}"
+PYTHON="${PYTHON:-python}"
+DRY_RUN="${DRY_RUN:-0}"
+TRAIN_STEPS="${TRAIN_STEPS:-200}"
+TRAIN_BATCH="${TRAIN_BATCH:-128}"
+ROLLOUT_N="${ROLLOUT_N:-1}"
+VINE_K="${VINE_K:-5}"
+VINE_TRAIN_TRAJ="${VINE_TRAIN_TRAJ:-32}"
 VINE_MC_ENABLE_THINKING="${VINE_MC_ENABLE_THINKING:-True}"
 REWARD_MODE="${REWARD_MODE:-outcome}"
-VAL_BATCH="${VAL_BATCH:-128}"            # 每次验证的轨迹数
-PPO_MINI_BATCH="${PPO_MINI_BATCH:-32}"  # PPO 更新使用的 mini-batch
-MAX_RESP="${MAX_RESP:-4096}"           # 生成响应的最大 token 长度
-SAVE_FREQ="${SAVE_FREQ:-25}"           # checkpoint 保存间隔
+VAL_BATCH="${VAL_BATCH:-128}"
+PPO_MINI_BATCH="${PPO_MINI_BATCH:-32}"
+MAX_RESP="${MAX_RESP:-4096}"
+SAVE_FREQ="${SAVE_FREQ:-25}"
 RESUME_MODE="${RESUME_MODE:-disable}"     # disable/auto/resume_path
-RESUME_FROM_PATH="${RESUME_FROM_PATH:-}"  # RESUME_MODE=resume_path 时指定 global_step_* 目录
-TEST_FREQ="${TEST_FREQ:-20}"           # 验证间隔
-ENABLE_THINKING="${ENABLE_THINKING:-True}"  # Qwen chat template thinking 开关
-USE_KL="${USE_KL:-True}"               # actor KL loss 开关
-KL_COEF="${KL_COEF:-0.001}"            # actor KL loss 系数
-PPO_MICRO="${PPO_MICRO:-2}"            # actor 训练 micro-batch
+RESUME_FROM_PATH="${RESUME_FROM_PATH:-}"
+TEST_FREQ="${TEST_FREQ:-20}"
+ENABLE_THINKING="${ENABLE_THINKING:-True}"
+USE_KL="${USE_KL:-True}"
+KL_COEF="${KL_COEF:-0.001}"
+PPO_MICRO="${PPO_MICRO:-2}"
 LOGPROB_MICRO="${LOGPROB_MICRO:-4}"    # rollout/ref log-prob micro-batch
-MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-65536}"  # vLLM 每批最大 token 预算
-RAY_CPUS="${RAY_CPUS:-64}"             # Ray 初始化 CPU 配额
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.8}"    # vLLM 可使用的 GPU 显存比例
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"  # 默认使用 8 张 GPU
-N_GPUS="${N_GPUS:-8}"                  # trainer 使用的 GPU 数量
-TP_SIZE="${TP_SIZE:-2}"                  # 8GPU 下默认使用 2 路 TP、4 路 rollout DP
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-65536}"
+RAY_CPUS="${RAY_CPUS:-64}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.8}"
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
+N_GPUS="${N_GPUS:-8}"
+TP_SIZE="${TP_SIZE:-2}"
 ORACLE_POLICY="${ORACLE_POLICY:-all_oracle_actions}"  # turn-level oracle action policy
 ORACLE_REWARD="${ORACLE_REWARD:-2}"       # safe reveal reward
 ORACLE_FLAG_REWARD="${ORACLE_FLAG_REWARD:-1}"  # certain flag reward
@@ -51,14 +43,16 @@ NON_ORACLE_PENALTY="${NON_ORACLE_PENALTY:--1}"  # legal non-oracle reveal reward
 NON_ORACLE_FLAG_PENALTY="${NON_ORACLE_FLAG_PENALTY:--1.5}"  # legal non-oracle flag penalty
 INVALID_PENALTY="${INVALID_PENALTY:--2}"  # parse/illegal/truncate penalty
 OUTCOME_REWARD_SCALE="${OUTCOME_REWARD_SCALE:-1}"  # terminal outcome bonus disabled for imitation
-LOSS_MODE="${LOSS_MODE:-vanilla}"  # vanilla 或 gspo
+LOSS_MODE="${LOSS_MODE:-vanilla}"
 NUM_MINES="${NUM_MINES:-2}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VPR_GAMES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$VPR_GAMES_DIR/../.." && pwd)"
+source "$VPR_GAMES_DIR/launcher_utils.sh"
 DATA_DIR="$VPR_GAMES_DIR/data/vpr_minesweeper"
 TS="$(date +%Y%m%dT%H%M%S)"
-RUN_DIR="${RUN_DIR:-$(pwd)/runs/$TS}"
+RUN_DIR="${RUN_DIR:-$REPO_ROOT/runs/$TS}"
 mkdir -p "$RUN_DIR" "$RUN_DIR/ckpt" "$RUN_DIR/tensorboard"
 LOG_FILE="$RUN_DIR/train.log"
 
@@ -70,8 +64,13 @@ echo "Minesweeper:  mines:$NUM_MINES"
 echo "Run dir:      $RUN_DIR"
 echo "Resume:       mode=$RESUME_MODE path=${RESUME_FROM_PATH:-auto/latest-or-none}"
 
+vpr_validate_launcher
+if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY RUN: configuration validated; training was not started."
+    exit 0
+fi
 if [ ! -d "$MODEL_PATH" ]; then echo "ERROR: Model not found at $MODEL_PATH" >&2; exit 1; fi
-if [ ! -x "$PYTHON" ]; then echo "ERROR: Python not found at $PYTHON" >&2; exit 1; fi
+if ! command -v "$PYTHON" >/dev/null 2>&1 && [ ! -x "$PYTHON" ]; then echo "ERROR: Python not found: $PYTHON" >&2; exit 1; fi
 if [ "$RESUME_MODE" = "resume_path" ] && [ -z "$RESUME_FROM_PATH" ]; then
     echo "ERROR: RESUME_FROM_PATH is required when RESUME_MODE=resume_path" >&2
     exit 1

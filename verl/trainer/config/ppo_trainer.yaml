@@ -141,7 +141,9 @@ actor_rollout_ref:
       # sampling parameters for validation
       top_k: -1 # 0 for hf rollout, -1 for vllm rollout
       top_p: 1.0
+      min_p: 0.0
       temperature: 0
+      seed: null
       n: 1
       do_sample: False # default eager for validation
     multi_turn:
@@ -252,6 +254,25 @@ algorithm:
     mode: "mean_norm" # "mean_norm" or "mean_std_norm"
     enable_similarity: False # whether to use similarity-based anchor state grouping in GiGPO (supported for text-only tasks)
     similarity_thresh: 0.95 # similarity threshold for GiGPO (0.0, 1.0)
+  vpr:
+    outcome_reward_scale: 1.0  # additive terminal bonus at the final step of winning episodes
+    state_group_advantage_mode: group_whiten  # group_whiten or mean_then_batch_whiten
+    skip_update_equal_reward_threshold: null  # skip actor/critic update when skipped_equal_reward_rate exceeds this; null disables
+  turn_level_ppo:
+    normalize_adv: True
+    value_token: first
+    reward_source: non_tensor_rewards
+  vineppo:
+    num_rollouts_per_state: 1
+    mc_enable_thinking: null  # null follows data.apply_chat_template_kwargs.enable_thinking; scripts can set False for faster MC rollouts
+    gamma: ${algorithm.gamma}
+    normalize_adv: True
+    eps: 1.0e-8
+    max_train_trajectories: null  # null trains on all sampled trajectories; set e.g. 32 to MC-estimate and train only a trajectory subset
+    max_states_per_batch: null
+    state_stride: 1
+    drop_padding: True
+    snapshot_fields_cleanup: True
   filter_groups: # DAPO from https://arxiv.org/abs/2503.14476
     enable: False
     max_num_gen_batches: 10
@@ -294,13 +315,19 @@ env:
   seed: 0
   max_steps: 50
   history_length: 2
+  game_action_format: action_tag
   resources_per_worker: # resources for each env worker
     num_cpus: 0.1
     num_gpus: 0
   rollout:
     n: 1 # the group number of envs (for GRPO and GiGPO).
+  agentic_eval:
+    native_action_protocol: False
+    prompt_rendering: chatml
+    action_format: action_tag
   alfworld:
     eval_dataset: eval_in_distribution
+    deterministic_eval: False
   search:
     log_requests: false
     search_url: "http://127.0.0.1:8000/retrieve" # also support multiple urls: ["http://127.0.0.1:8000/retrieve", "http://127.0.0.1:8001/retrieve"]
@@ -314,3 +341,18 @@ env:
   webshop:
     use_small: True
     human_goals: False
+    data_dir: null
+    deterministic_eval: False
+    shared_server: False
+  invalid_penalty: -1.0
+  tictactoe:
+    opponent: random
+  sudoku:
+    n: 3
+    clues: 40
+    terminate_on_wrong_digit: true
+    outcome_success_correct_fills: null
+  minesweeper:
+    rows: 5
+    cols: 5
+    mines: 5

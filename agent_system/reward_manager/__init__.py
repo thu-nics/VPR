@@ -14,3 +14,5 @@
 # limitations under the License.
 
 from .episode import EpisodeRewardManager
+from .turn import TurnRewardManager
+from .dapo_turn import DAPOTurnRewardManager

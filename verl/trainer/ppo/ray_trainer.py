@@ -88,13 +88,29 @@ class AdvantageEstimator(str, Enum):
 
     GAE = "gae"
     GRPO = "grpo"
+    DAPO = "dapo"
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REINFORCE_PLUS_PLUS_BASELINE = "reinforce_plus_plus_baseline"
     REMAX = "remax"
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
+    VPR = 'vpr'
+    TurnLevelPPO = 'turn_level_ppo'
+    VinePPO = 'vineppo'
 
+
+def _should_skip_vpr_state_group_update(meta_info, vpr_cfg):
+    threshold = None
+    if vpr_cfg is not None:
+        threshold = vpr_cfg.get("skip_update_equal_reward_threshold", None)
+    if threshold is None:
+        return False, 0.0, 0.0
+
+    skipped_equal_rate = float(meta_info.get('state_group_skipped_equal_reward_rate', 0.0) or 0.0)
+    skipped_oracle_rate = float(meta_info.get('state_group_skipped_oracle_rate', 0.0) or 0.0)
+    product = skipped_equal_rate * skipped_oracle_rate
+    return skipped_equal_rate > float(threshold), skipped_equal_rate, product
 
 @dataclass
 class ResourcePoolManager:
@@ -241,6 +257,79 @@ def compute_response_mask(data: DataProto):
     return attention_mask[:, -response_length:]
 
 
+def _compute_validation_diagnostics(data_sources, validation_extra_infos):
+    """Aggregate response-level validation diagnostics by data source."""
+    data_sources = np.asarray(data_sources)
+    num_samples = len(data_sources)
+    metrics = {}
+
+    aligned_infos = {
+        key: np.asarray(values)
+        for key, values in validation_extra_infos.items()
+        if len(values) == num_samples
+    }
+
+    for data_source in np.unique(data_sources):
+        source_mask = data_sources == data_source
+        prefix = f"val/{data_source}"
+        source_count = int(source_mask.sum())
+        metrics[f"{prefix}/num_samples"] = source_count
+
+        if "acc" in aligned_infos:
+            accuracy = aligned_infos["acc"][source_mask].astype(np.float64)
+            metrics[f"{prefix}/accuracy"] = float(accuracy.mean())
+            metrics[f"{prefix}/correct_count"] = int(accuracy.sum())
+
+        if "score" in aligned_infos:
+            raw_scores = aligned_infos["score"][source_mask].astype(np.float64)
+            metrics[f"{prefix}/raw_score/mean"] = float(raw_scores.mean())
+
+        if "pred" in aligned_infos:
+            predictions = aligned_infos["pred"][source_mask]
+            valid_answers = np.asarray(
+                [str(prediction) != "[INVALID]" for prediction in predictions],
+                dtype=np.float64,
+            )
+            valid_answer_rate = float(valid_answers.mean())
+            metrics[f"{prefix}/valid_answer_rate"] = valid_answer_rate
+            metrics[f"{prefix}/invalid_answer_rate"] = 1.0 - valid_answer_rate
+
+        if "overlong" in aligned_infos:
+            overlong = aligned_infos["overlong"][source_mask].astype(np.float64)
+            metrics[f"{prefix}/overlong_rate"] = float(overlong.mean())
+
+        if "overlong_reward" in aligned_infos:
+            penalties = aligned_infos["overlong_reward"][source_mask].astype(
+                np.float64
+            )
+            metrics[f"{prefix}/overlong_penalty/mean"] = float(penalties.mean())
+
+        if "response_length" in aligned_infos:
+            response_lengths = aligned_infos["response_length"][
+                source_mask
+            ].astype(np.float64)
+            max_response_length = aligned_infos["max_response_length"][
+                source_mask
+            ].astype(np.float64)
+            metrics[f"{prefix}/response_length/mean"] = float(
+                response_lengths.mean()
+            )
+            metrics[f"{prefix}/response_length/p50"] = float(
+                np.percentile(response_lengths, 50)
+            )
+            metrics[f"{prefix}/response_length/p95"] = float(
+                np.percentile(response_lengths, 95)
+            )
+            metrics[f"{prefix}/response_length/max"] = float(
+                response_lengths.max()
+            )
+            metrics[f"{prefix}/response_length/clip_ratio"] = float(
+                np.mean(response_lengths >= max_response_length)
+            )
+
+    return metrics
+
+
 def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, step_advantage_w=1.0, gigpo_mode="mean_std_norm", gigpo_enable_similarity=False, gigpo_similarity_thresh=0.95, **kwargs):
     """Compute advantage estimates for policy optimization.
 
@@ -280,20 +369,120 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 kwargs.get("pf_ppo_reweight_method", "pow"),
                 kwargs.get("pf_ppo_weight_pow", 2.0),
             )
-    elif adv_estimator == AdvantageEstimator.GRPO:
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.DAPO):
         # TODO: test on more adv estimator type
         grpo_calculation_mask = data.batch["response_mask"]
-        if multi_turn:
-            # If multi-turn, replace the mask with the relevant part of loss_mask
+        if multi_turn and "loss_mask" in data.batch:
+            # If multi-turn AND a per-token loss_mask is available, use its response part
+            # (it excludes interleaved observation tokens). The loss_mask is not populated
+            # until just before the actor update, so at advantage time it is usually absent
+            # for these single-turn-per-step VPR rollouts — fall back to response_mask.
             response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
             grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        group_index = data.non_tensor_batch["uid"]
+        if (
+            adv_estimator == AdvantageEstimator.DAPO
+            and "state_group_uid" in data.non_tensor_batch
+        ):
+            group_index = data.non_tensor_batch["state_group_uid"]
+        sample_mask = None
+        if adv_estimator == AdvantageEstimator.DAPO:
+            is_padding = np.asarray(
+                data.non_tensor_batch.get(
+                    "is_padding", np.zeros(len(data), dtype=bool)
+                ),
+                dtype=bool,
+            )
+            dapo_skip_loss = is_padding.copy()
+            if "state_group_uid" in data.non_tensor_batch:
+                if "rewards" not in data.non_tensor_batch:
+                    raise ValueError(
+                        "state-group DAPO requires raw environment rewards for dynamic filtering"
+                    )
+                state_group_ids = np.asarray(
+                    data.non_tensor_batch["state_group_uid"], dtype=object
+                )
+                raw_rewards = np.asarray(
+                    data.non_tensor_batch["rewards"], dtype=np.float32
+                )
+                keep = ~is_padding
+                raw_group_count = 0
+                effective_group_count = 0
+                for state_group_id in np.unique(state_group_ids[keep]):
+                    group_mask = keep & (state_group_ids == state_group_id)
+                    raw_group_count += 1
+                    if np.ptp(raw_rewards[group_mask]) <= 1e-8:
+                        dapo_skip_loss[group_mask] = True
+                    else:
+                        effective_group_count += 1
+                data.meta_info["dapo/raw_state_groups"] = float(raw_group_count)
+                data.meta_info["dapo/effective_state_groups"] = float(
+                    effective_group_count
+                )
+                data.meta_info["dapo/skipped_equal_reward_rate"] = float(
+                    1.0 - effective_group_count / max(raw_group_count, 1)
+                )
+                data.meta_info["dapo/train_sample_rate"] = float(
+                    (~dapo_skip_loss).sum() / max(keep.sum(), 1)
+                )
+                if "vpr_game" in data.non_tensor_batch:
+                    tasks = np.asarray(
+                        data.non_tensor_batch["vpr_game"], dtype=object
+                    ).astype(str)
+                    for task in sorted(set(tasks[keep])):
+                        if not task:
+                            continue
+                        task_mask = keep & (tasks == task)
+                        task_groups = np.unique(state_group_ids[task_mask])
+                        effective_task_groups = sum(
+                            bool(
+                                np.any(
+                                    task_mask
+                                    & (state_group_ids == state_group_id)
+                                    & ~dapo_skip_loss
+                                )
+                            )
+                            for state_group_id in task_groups
+                        )
+                        prefix = f"dapo/{task}"
+                        data.meta_info[f"{prefix}/raw_state_groups"] = float(
+                            len(task_groups)
+                        )
+                        data.meta_info[f"{prefix}/effective_state_groups"] = float(
+                            effective_task_groups
+                        )
+                        data.meta_info[f"{prefix}/skipped_equal_reward_rate"] = float(
+                            1.0 - effective_task_groups / max(len(task_groups), 1)
+                        )
+                        data.meta_info[f"{prefix}/train_sample_rate"] = float(
+                            (task_mask & ~dapo_skip_loss).sum()
+                            / max(task_mask.sum(), 1)
+                        )
+            data.non_tensor_batch["dapo_skip_loss"] = dapo_skip_loss
+            sample_mask = ~dapo_skip_loss
+            if dapo_skip_loss.any():
+                grpo_calculation_mask = grpo_calculation_mask.clone()
+                grpo_calculation_mask[
+                    torch.as_tensor(
+                        dapo_skip_loss,
+                        dtype=torch.bool,
+                        device=grpo_calculation_mask.device,
+                    )
+                ] = 0
+                data.batch["response_mask"] = grpo_calculation_mask
         # Call compute_grpo_outcome_advantage with parameters matching its definition
         advantages, returns = core_algos.compute_grpo_outcome_advantage(
             token_level_rewards=data.batch["token_level_rewards"],
             response_mask=grpo_calculation_mask,
-            index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
+            index=group_index,
+            traj_index=data.non_tensor_batch.get(
+                "traj_uid", data.non_tensor_batch["uid"]
+            ),
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            compute_mean_std_cross_steps=not bool(
+                kwargs.get("dapo_trajectory_level_advantage", False)
+            ),
+            sample_mask=sample_mask,
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
@@ -355,6 +544,51 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             enable_similarity=gigpo_enable_similarity,
             similarity_thresh=gigpo_similarity_thresh,
             )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.VPR:
+        vpr_outcome_scale = kwargs.get('vpr_outcome_reward_scale', 1.0)
+        vpr_state_group_advantage_mode = kwargs.get('vpr_state_group_advantage_mode', 'group_whiten')
+        advantages, returns = core_gigpo.compute_vpr_turn_level_advantage(
+            data=data,
+            min_group_size=4,
+            outcome_reward_scale=vpr_outcome_scale,
+            state_group_advantage_mode=vpr_state_group_advantage_mode,
+        )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
+        # Log VPR-specific metrics over REAL rows only (exclude divisibility padding).
+        _vpr_pad = np.asarray(
+            data.non_tensor_batch.get('is_padding', np.zeros(len(data), dtype=bool)), dtype=bool)
+        _vpr_keep = ~_vpr_pad
+        if 'vpr_oracle_reward' in data.non_tensor_batch:
+            _vals = np.asarray(data.non_tensor_batch['vpr_oracle_reward'])[_vpr_keep]
+            if _vals.size:
+                data.meta_info['vpr_oracle_reward_mean'] = float(_vals.mean())
+        if 'vpr_outcome_bonus' in data.non_tensor_batch:
+            _vals = np.asarray(data.non_tensor_batch['vpr_outcome_bonus'])[_vpr_keep]
+            if _vals.size:
+                data.meta_info['vpr_outcome_bonus_mean'] = float(_vals.mean())
+    elif adv_estimator == AdvantageEstimator.TurnLevelPPO:
+        cfg = kwargs.get('turn_level_ppo', {})
+        advantages, returns = core_gigpo.compute_turn_level_ppo_advantage(
+            data=data,
+            gamma=gamma,
+            lam=lam,
+            normalize_adv=cfg.get('normalize_adv', True),
+            value_token=cfg.get('value_token', 'first'),
+            reward_source=cfg.get('reward_source', 'non_tensor_rewards'),
+        )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.VinePPO:
+        cfg = kwargs.get('vineppo', {})
+        advantages, returns = core_gigpo.compute_vineppo_advantage(
+            data=data,
+            gamma=cfg.get('gamma', gamma),
+            normalize_adv=cfg.get('normalize_adv', True),
+            eps=cfg.get('eps', 1e-8),
+        )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
     else:
@@ -442,16 +676,19 @@ class RayPPOTrainer:
         if config.algorithm.use_kl_in_reward:
             self.kl_ctrl_in_reward = core_algos.get_kl_controller(config.algorithm.kl_ctrl)
 
-        if self.config.algorithm.adv_estimator == AdvantageEstimator.GAE:
+        if self.config.algorithm.adv_estimator in [AdvantageEstimator.GAE, AdvantageEstimator.TurnLevelPPO]:
             self.use_critic = True
         elif self.config.algorithm.adv_estimator in [
             AdvantageEstimator.GRPO,
+            AdvantageEstimator.DAPO,
             AdvantageEstimator.GRPO_PASSK,
             AdvantageEstimator.REINFORCE_PLUS_PLUS,
             AdvantageEstimator.REMAX,
             AdvantageEstimator.RLOO,
             AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
-            AdvantageEstimator.GiGPO
+            AdvantageEstimator.GiGPO,
+            AdvantageEstimator.VPR,
+            AdvantageEstimator.VinePPO,
         ]:
             self.use_critic = False
         else:
@@ -460,14 +697,36 @@ class RayPPOTrainer:
         self._validate_config()
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
+
     def _validate_config(self):
         config = self.config
         # number of GPUs total
         n_gpus = config.trainer.n_gpus_per_node * config.trainer.nnodes
 
         # 1. Check total batch size for data correctness
+        rollout_mode = getattr(config.env.rollout, "mode", "vanilla")
         real_train_batch_size = config.data.train_batch_size * config.actor_rollout_ref.rollout.n
+        if rollout_mode == "state_group":
+            real_train_batch_size = config.data.train_batch_size
         assert real_train_batch_size % n_gpus == 0, f"real_train_batch_size ({real_train_batch_size}) must be divisible by total n_gpus ({n_gpus})."
+
+        if config.algorithm.adv_estimator == AdvantageEstimator.VinePPO:
+            if rollout_mode != "vanilla":
+                raise ValueError("VinePPO MVP supports env.rollout.mode=vanilla only")
+            if config.reward_model.enable:
+                raise ValueError("VinePPO does not use reward_model")
+            if getattr(config.env, "history_length", 0) != 0:
+                raise ValueError("VinePPO requires env.history_length=0")
+            entropy_coeff = float(config.actor_rollout_ref.actor.get("entropy_coeff", 0.0) or 0.0)
+            if abs(entropy_coeff) > 0.0:
+                raise ValueError(
+                    "VinePPO requires actor_rollout_ref.actor.entropy_coeff=0; "
+                    "entropy-only updates corrupt zero-advantage batches"
+                )
+            if config.algorithm.vineppo.get("max_states_per_batch", None) is not None:
+                raise ValueError("VinePPO MVP requires algorithm.vineppo.max_states_per_batch=null")
+            if int(config.algorithm.vineppo.get("state_stride", 1) or 1) != 1:
+                raise ValueError("VinePPO MVP requires algorithm.vineppo.state_stride=1")
 
         # A helper function to check "micro_batch_size" vs "micro_batch_size_per_gpu"
         # We throw an error if the user sets both. The new convention is "..._micro_batch_size_per_gpu".
@@ -568,8 +827,15 @@ class RayPPOTrainer:
 
         # check multi_turn with tool config
         if config.actor_rollout_ref.rollout.multi_turn.enable:
-            assert config.actor_rollout_ref.rollout.multi_turn.tool_config_path is not None, "tool_config_path must be set when enabling multi_turn with tool, due to no role-playing support"
-            assert config.algorithm.adv_estimator in [AdvantageEstimator.GRPO], "only GRPO is tested for multi-turn with tool"
+            supported_multi_turn = [
+                AdvantageEstimator.GRPO,
+                AdvantageEstimator.DAPO,
+                AdvantageEstimator.VPR,
+                AdvantageEstimator.TurnLevelPPO,
+                AdvantageEstimator.VinePPO,
+            ]
+            if config.algorithm.adv_estimator not in supported_multi_turn:
+                assert config.actor_rollout_ref.rollout.multi_turn.tool_config_path is not None, "tool_config_path must be set when enabling multi_turn with tool, due to no role-playing support"
 
         print("[validate_config] All configuration checks passed successfully!")
 
@@ -658,9 +924,19 @@ class RayPPOTrainer:
         with open(filename, "w") as f:
             for i in range(n):
                 entry = {k: v[i] for k, v in base_data.items()}
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                f.write(json.dumps(entry, ensure_ascii=False, default=self._json_default) + "\n")
 
         print(f"Dumped generations to {filename}")
+
+    @staticmethod
+    def _json_default(value):
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if torch.is_tensor(value):
+            return value.detach().cpu().tolist()
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
     def _maybe_log_val_generations(self, inputs, outputs, scores):
         """Log a table of validation samples to the configured logger (wandb or swanlab)"""
@@ -697,6 +973,7 @@ class RayPPOTrainer:
         sample_inputs = []
         sample_outputs = []
         sample_scores = []
+        validation_extra_infos = defaultdict(list)
 
         for test_data in self.val_dataloader:
             test_batch = DataProto.from_single_dict(test_data)
@@ -708,14 +985,11 @@ class RayPPOTrainer:
             if self.config.reward_model.enable and test_batch[0].non_tensor_batch["reward_model"]["style"] == "model":
                 return {}
 
-            # Store original inputs
-            input_ids = test_batch.batch["input_ids"]
-            # TODO: Can we keep special tokens except for padding tokens?
-            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
-            sample_inputs.extend(input_texts)
-
+            is_agent_validation = self.traj_collector is not None
             batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
-            non_tensor_batch_keys_to_pop = ["raw_prompt_ids", "data_source"]
+            non_tensor_batch_keys_to_pop = ["raw_prompt_ids"]
+            if is_agent_validation:
+                non_tensor_batch_keys_to_pop.append("data_source")
             if "multi_modal_data" in test_batch.non_tensor_batch:
                 non_tensor_batch_keys_to_pop.append("multi_modal_data")
             if "raw_prompt" in test_batch.non_tensor_batch:
@@ -738,26 +1012,34 @@ class RayPPOTrainer:
             }
             print(f"test_gen_batch meta info: {test_gen_batch.meta_info}")
 
-            # # pad to be divisible by dp_size
-            # test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
-            # test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
 
-            # # unpad
-            # test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
-
-            ################ agent-environment loop ###############
-            test_output_gen_batch = self.traj_collector.multi_turn_loop(
-                                                    gen_batch=test_gen_batch,
-                                                    actor_rollout_wg=self.actor_rollout_wg,
-                                                    envs=self.val_envs,
-                                                    is_train=False,
-                                                    )
-            print('validation generation end')
-            del test_batch
-            test_batch = test_output_gen_batch
+            if is_agent_validation:
+                test_output_gen_batch = self.traj_collector.multi_turn_loop(
+                    gen_batch=test_gen_batch,
+                    actor_rollout_wg=self.actor_rollout_wg,
+                    envs=self.val_envs,
+                    is_train=False,
+                )
+                del test_batch
+                test_batch = test_output_gen_batch
+            else:
+                test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(
+                    test_gen_batch, self.actor_rollout_wg.world_size
+                )
+                test_output_gen_batch_padded = (
+                    self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+                )
+                test_output_gen_batch = unpad_dataproto(
+                    test_output_gen_batch_padded, pad_size=pad_size
+                )
+                test_batch = test_batch.union(test_output_gen_batch)
+            print("validation generation end")
             # Store generated outputs
             output_ids = test_output_gen_batch.batch["responses"]
             output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            prompt_ids = test_output_gen_batch.batch["prompts"]
+            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in prompt_ids]
+            sample_inputs.extend(input_texts)
             sample_outputs.extend(output_texts)
 
             # test_batch = test_batch.union(test_output_gen_batch)
@@ -768,13 +1050,51 @@ class RayPPOTrainer:
             scores = reward_tensor.sum(-1).cpu().tolist()
             sample_scores.extend(scores)
 
+            reward_extra_info = result.get("reward_extra_info", {})
+            for key, values in reward_extra_info.items():
+                if len(values) == reward_tensor.shape[0]:
+                    validation_extra_infos[key].extend(list(values))
+
+            response_mask = test_output_gen_batch.batch["attention_mask"][
+                :, -output_ids.shape[-1]:
+            ]
+            response_lengths = response_mask.sum(dim=-1).cpu().tolist()
+            validation_extra_infos["response_length"].extend(response_lengths)
+            validation_extra_infos["max_response_length"].extend(
+                [output_ids.shape[-1]] * len(response_lengths)
+            )
+
+            raw_keys = (
+                "data_source", "traj_uid", "turn_index", "rewards", "active_masks",
+                "is_terminal", "terminal_success", "episode_rewards", "episode_lengths",
+                "is_action_valid", "tool_callings",
+            )
+            for key in raw_keys:
+                values = test_output_gen_batch.non_tensor_batch.get(key)
+                if values is not None:
+                    validation_extra_infos[key].extend(list(values))
+
             reward_tensor_lst.append(reward_tensor)
             data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
-            tool_calling_list.append(test_output_gen_batch.non_tensor_batch['tool_callings'])
-            traj_uid_list.append(test_output_gen_batch.non_tensor_batch['traj_uid'])
+            if all(
+                key in test_output_gen_batch.non_tensor_batch
+                for key in ("tool_callings", "traj_uid")
+            ):
+                tool_calling_list.append(
+                    test_output_gen_batch.non_tensor_batch["tool_callings"]
+                )
+                traj_uid_list.append(
+                    test_output_gen_batch.non_tensor_batch["traj_uid"]
+                )
+            if self.config.reward_model.get('reward_manager', 'episode') == 'turn':
+                if not hasattr(self, '_val_episode_reward_list'):
+                    self._val_episode_reward_list = []
+                self._val_episode_reward_list.append(
+                    test_output_gen_batch.non_tensor_batch.get('episode_rewards', np.full(len(test_output_gen_batch), np.nan))
+                )
             # success rate
             for k in test_batch.non_tensor_batch.keys():
-                if 'success_rate' in k:
+                if 'success_rate' in k or k.startswith('env/'):
                     if k not in success_rate_dict:
                         success_rate_dict[k] = []
                     success_rate_dict[k].append(test_batch.non_tensor_batch[k][0])
@@ -786,34 +1106,58 @@ class RayPPOTrainer:
 
         reward_tensor = torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()  # (batch_size,)
         data_sources = np.concatenate(data_source_lst, axis=0)
-        tool_callings = np.concatenate(tool_calling_list, axis=0)
-        traj_uids = np.concatenate(traj_uid_list, axis=0)
+        if traj_uid_list:
+            tool_callings = np.concatenate(tool_calling_list, axis=0)
+            traj_uids = np.concatenate(traj_uid_list, axis=0)
+            _, unique_idx = np.unique(traj_uids, return_index=True)
+            unique_data_sources = data_sources[unique_idx]
+        else:
+            tool_callings = None
+            unique_idx = np.arange(len(data_sources))
+            unique_data_sources = data_sources
         success_rate = {k: np.mean(v) for k, v in success_rate_dict.items()}
+
+        # For per-turn reward managers, validation test_score should remain an
+        # episode-level outcome metric rather than average immediate turn reward.
+        if self.config.reward_model.get('reward_manager', 'episode') == 'turn' and hasattr(self, '_val_episode_reward_list'):
+            episode_rewards = np.concatenate(self._val_episode_reward_list, axis=0)
+            delattr(self, '_val_episode_reward_list')
+            eval_rewards = episode_rewards[unique_idx]
+            eval_data_sources = unique_data_sources
+        else:
+            eval_rewards = reward_tensor.numpy()
+            eval_data_sources = data_sources
 
         # evaluate test_score based on data source
         data_source_reward = {}
-        for i in range(reward_tensor.shape[0]):
-            data_source = data_sources[i]
+        for i in range(len(eval_rewards)):
+            data_source = eval_data_sources[i]
             if data_source not in data_source_reward:
                 data_source_reward[data_source] = []
-            data_source_reward[data_source].append(reward_tensor[i].item())
+            data_source_reward[data_source].append(float(eval_rewards[i]))
 
-        # evaluate tool call based on data source
-        # the values in tool_callings represent the tool call count for each trajectory; however, since the batch is expanded by step, we only need to take one value for each unique trajectories.
+        # Agent rollouts expose trajectory-level tool call counts; standard DAPO does not.
         data_source_tool_calling = {}
-        unique_traj_uid, unique_idx = np.unique(traj_uids, return_index=True)
-        unique_data_sources = data_sources[unique_idx]
-        unique_tool_callings = tool_callings[unique_idx]
-
-        for i in range(unique_tool_callings.shape[0]):
-            data_source = unique_data_sources[i]
-            if data_source not in data_source_tool_calling:
-                data_source_tool_calling[data_source] = []
-            data_source_tool_calling[data_source].append(unique_tool_callings[i].item())
+        if tool_callings is not None:
+            unique_tool_callings = tool_callings[unique_idx]
+            for i in range(unique_tool_callings.shape[0]):
+                data_source = unique_data_sources[i]
+                if data_source not in data_source_tool_calling:
+                    data_source_tool_calling[data_source] = []
+                data_source_tool_calling[data_source].append(
+                    unique_tool_callings[i].item()
+                )
 
         metric_dict = {}
         for data_source, rewards in data_source_reward.items():
             metric_dict[f'val/{data_source}/test_score'] = np.mean(rewards)
+
+        metric_dict.update(
+            _compute_validation_diagnostics(
+                data_sources=data_sources,
+                validation_extra_infos=validation_extra_infos,
+            )
+        )
 
         for data_source, tool_calls in data_source_tool_calling.items():
             metric_dict[f'val/{data_source}/tool_call_count/mean'] = np.mean(tool_calls)
@@ -822,6 +1166,20 @@ class RayPPOTrainer:
 
         for k, v in success_rate.items():
             metric_dict[f'val/{k}'] = v
+
+        validation_data_dir = self.config.trainer.get("validation_data_dir", None)
+        if validation_data_dir:
+            self._dump_generations(
+                inputs=sample_inputs,
+                outputs=sample_outputs,
+                scores=sample_scores,
+                reward_extra_infos_dict=validation_extra_infos,
+                dump_path=validation_data_dir,
+            )
+            metrics_path = os.path.join(validation_data_dir, f"{self.global_steps}.metrics.json")
+            with open(metrics_path, "w") as f:
+                json.dump(metric_dict, f, indent=2, sort_keys=True, default=self._json_default)
+            print(f"Dumped validation metrics to {metrics_path}")
 
         return metric_dict
 
@@ -839,10 +1197,16 @@ class RayPPOTrainer:
         # create actor and rollout
         if self.hybrid_engine:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.ActorRollout)
+            worker_role = "actor_rollout"
+            if (
+                self.config.trainer.get("val_only", False)
+                and self.config.trainer.resume_mode == "disable"
+            ):
+                worker_role = "rollout"
             actor_rollout_cls = RayClassWithInitArgs(
                 cls=self.role_worker_mapping[Role.ActorRollout],
                 config=self.config.actor_rollout_ref,
-                role="actor_rollout",
+                role=worker_role,
             )
             self.resource_pool_to_cls[resource_pool]["actor_rollout"] = actor_rollout_cls
         else:
@@ -982,6 +1346,10 @@ class RayPPOTrainer:
         if self.use_critic:
             self.critic_wg.load_checkpoint(critic_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
 
+        if self.config.trainer.get("val_only", False):
+            print("Validation-only run: skipping training dataloader state restore")
+            return
+
         # load dataloader,
         # TODO: from remote not implemented yet
         dataloader_local_path = os.path.join(global_step_folder, "data.pt")
@@ -1027,14 +1395,17 @@ class RayPPOTrainer:
         # load checkpoint before doing anything
         self._load_checkpoint()
 
-        # perform validation before training
-        # currently, we only support validation using the reward_function.
-        if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
+        # Validation-only runs must never fall through into the training loop,
+        # regardless of the regular val_before_train setting.
+        val_only = self.config.trainer.get("val_only", False)
+        if val_only and self.val_reward_fn is None:
+            raise ValueError("trainer.val_only requires a validation reward function")
+        if self.val_reward_fn is not None and (val_only or self.config.trainer.get("val_before_train", True)):
             val_metrics = self._validate()
             assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
-            if self.config.trainer.get("val_only", False):
+            if val_only:
                 return
 
         # add tqdm
@@ -1079,6 +1450,9 @@ class RayPPOTrainer:
                         #     self.async_rollout_manager.sleep()
 
                         ################ agent-environment loop ###############
+                        if hasattr(self.config, "env") and hasattr(self.config.env, "rollout"):
+                            with open_dict(self.config.env.rollout):
+                                self.config.env.rollout.current_step = int(self.global_steps)
                         gen_batch_output = self.traj_collector.multi_turn_loop(
                                                                 gen_batch=gen_batch,
                                                                 actor_rollout_wg=self.actor_rollout_wg,
@@ -1127,11 +1501,22 @@ class RayPPOTrainer:
                     # compute global_valid tokens
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
+                    if self.config.algorithm.adv_estimator == AdvantageEstimator.VinePPO:
+                        with _timer("vineppo_mc", timing_raw):
+                            batch = self.traj_collector.estimate_vine_values_for_batch(
+                                batch=batch,
+                                actor_rollout_wg=self.actor_rollout_wg,
+                                envs=self.envs,
+                                vine_cfg=self.config.algorithm.vineppo,
+                                generation_meta_info=gen_batch.meta_info,
+                            )
+
                     with _timer("reward", timing_raw):
                         # compute reward model score
                         if self.use_rm:
-                            reward_tensor = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(reward_tensor)
+                            if "rm_scores" not in batch.batch:
+                                reward_tensor = self.rm_wg.compute_rm_score(batch)
+                                batch = batch.union(reward_tensor)
 
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
@@ -1231,22 +1616,143 @@ class RayPPOTrainer:
                             pf_ppo_weight_pow=self.config.algorithm.pf_ppo.weight_pow,
                             step_advantage_w=self.config.algorithm.gigpo.step_advantage_w,
                             gigpo_mode=self.config.algorithm.gigpo.mode,
-                            gigpo_enable_similarity= self.config.algorithm.gigpo.enable_similarity,
+                            gigpo_enable_similarity=self.config.algorithm.gigpo.enable_similarity,
                             gigpo_similarity_thresh=self.config.algorithm.gigpo.similarity_thresh,
+                            vpr_outcome_reward_scale=self.config.algorithm.get('vpr', {}).get('outcome_reward_scale', 1.0),
+                            vpr_state_group_advantage_mode=self.config.algorithm.get('vpr', {}).get('state_group_advantage_mode', 'group_whiten'),
+                            turn_level_ppo=self.config.algorithm.get('turn_level_ppo', {}),
+                            vineppo=self.config.algorithm.get('vineppo', {}),
+                            dapo_trajectory_level_advantage=bool(
+                                self.config.algorithm.get(
+                                    "dapo_trajectory_level_advantage", False
+                                )
+                            ),
                         )
+                        if self.config.algorithm.adv_estimator == AdvantageEstimator.VinePPO and self.config.algorithm.vineppo.get('snapshot_fields_cleanup', True):
+                            for _key in ['vine_pre_snapshot', 'vine_post_snapshot']:
+                                if _key in batch.non_tensor_batch:
+                                    batch.non_tensor_batch.pop(_key)
+
+                        # Expose estimator-specific metrics.
+                        for _key, _value in batch.meta_info.items():
+                            if (
+                                _key.startswith('turn_level_ppo/')
+                                or _key.startswith('vineppo/')
+                                or _key.startswith('dapo/')
+                            ):
+                                metrics[_key] = _value
+                        skip_policy_update = False
+                        if self.config.algorithm.adv_estimator == 'vpr':
+                            if 'vpr_oracle_reward_mean' in batch.meta_info:
+                                metrics['vpr/oracle_reward_mean'] = batch.meta_info['vpr_oracle_reward_mean']
+                            if 'vpr_outcome_bonus_mean' in batch.meta_info:
+                                metrics['vpr/outcome_bonus_mean'] = batch.meta_info['vpr_outcome_bonus_mean']
+                            if 'state_group_random_select_prob' in batch.non_tensor_batch:
+                                metrics['state_group/random_select_prob'] = float(
+                                    np.mean(batch.non_tensor_batch['state_group_random_select_prob'])
+                                )
+                            for _key, _metric in {
+                                'state_group_best_reward_mean': 'state_group/best_reward_mean',
+                                'state_group_reward_std_mean': 'state_group/reward_std_mean',
+                                'state_group_zero_std_rate': 'state_group/zero_std_rate',
+                                'state_group_skipped_equal_reward_rate': 'state_group/skipped_equal_reward_rate',
+                                'state_group_skipped_sample_rate': 'state_group/skipped_sample_rate',
+                                'state_group_train_sample_rate': 'state_group/train_sample_rate',
+                                'state_group_batch_adv_mean': 'state_group/batch_adv_mean',
+                                'state_group_batch_adv_std': 'state_group/batch_adv_std',
+                                'state_group_unique_action_rate': 'state_group/unique_action_rate',
+                                'state_group_selected_oracle_rate': 'state_group/selected_oracle_rate',
+                                'state_group_selected_safe_reveal_rate': 'state_group/selected_safe_reveal_rate',
+                                'state_group_selected_certain_flag_rate': 'state_group/selected_certain_flag_rate',
+                                'state_group_selected_guess_rate': 'state_group/selected_guess_rate',
+                                'state_group_selected_non_oracle_reveal_rate': 'state_group/selected_non_oracle_reveal_rate',
+                                'state_group_selected_non_oracle_flag_rate': 'state_group/selected_non_oracle_flag_rate',
+                                'state_group_random_selected_rate': 'state_group/random_selected_rate',
+                                'state_group_best_selected_rate': 'state_group/best_selected_rate',
+                                'state_group_random_selected_oracle_rate': 'state_group/random_selected_oracle_rate',
+                                'state_group_best_selected_oracle_rate': 'state_group/best_selected_oracle_rate',
+                                'state_group_random_selected_valid_action_rate': 'state_group/random_selected_valid_action_rate',
+                                'state_group_best_selected_valid_action_rate': 'state_group/best_selected_valid_action_rate',
+                                'state_group_random_selected_non_oracle_reveal_rate': 'state_group/random_selected_non_oracle_reveal_rate',
+                                'state_group_random_selected_non_oracle_flag_rate': 'state_group/random_selected_non_oracle_flag_rate',
+                                'state_group_best_selected_non_oracle_reveal_rate': 'state_group/best_selected_non_oracle_reveal_rate',
+                                'state_group_best_selected_non_oracle_flag_rate': 'state_group/best_selected_non_oracle_flag_rate',
+                                'state_group_candidate_valid_action_rate': 'state_group/candidate_valid_action_rate',
+                                'state_group_candidate_invalid_action_rate': 'state_group/candidate_invalid_action_rate',
+                                'state_group_candidate_oracle_rate': 'state_group/candidate_oracle_rate',
+                                'state_group_candidate_oracle_reveal_rate': 'state_group/candidate_oracle_reveal_rate',
+                                'state_group_candidate_oracle_flag_rate': 'state_group/candidate_oracle_flag_rate',
+                                'state_group_candidate_safe_reveal_rate': 'state_group/candidate_safe_reveal_rate',
+                                'state_group_candidate_certain_flag_rate': 'state_group/candidate_certain_flag_rate',
+                                'state_group_candidate_guess_rate': 'state_group/candidate_guess_rate',
+                                'state_group_candidate_non_oracle_reveal_rate': 'state_group/candidate_non_oracle_reveal_rate',
+                                'state_group_candidate_non_oracle_flag_rate': 'state_group/candidate_non_oracle_flag_rate',
+                                'state_group_skipped_valid_action_rate': 'state_group/skipped_valid_action_rate',
+                                'state_group_skipped_invalid_action_rate': 'state_group/skipped_invalid_action_rate',
+                                'state_group_skipped_oracle_rate': 'state_group/skipped_oracle_rate',
+                                'state_group_skipped_oracle_reveal_rate': 'state_group/skipped_oracle_reveal_rate',
+                                'state_group_skipped_oracle_flag_rate': 'state_group/skipped_oracle_flag_rate',
+                                'state_group_skipped_safe_reveal_rate': 'state_group/skipped_safe_reveal_rate',
+                                'state_group_skipped_certain_flag_rate': 'state_group/skipped_certain_flag_rate',
+                                'state_group_skipped_guess_rate': 'state_group/skipped_guess_rate',
+                                'state_group_skipped_non_oracle_reveal_rate': 'state_group/skipped_non_oracle_reveal_rate',
+                                'state_group_skipped_non_oracle_flag_rate': 'state_group/skipped_non_oracle_flag_rate',
+                            }.items():
+                                if _key in batch.meta_info:
+                                    metrics[_metric] = batch.meta_info[_key]
+
+                            skip_policy_update, skip_update_equal_rate, skip_update_product = _should_skip_vpr_state_group_update(
+                                batch.meta_info,
+                                self.config.algorithm.get('vpr', {}),
+                            )
+                            metrics['state_group/skip_update_equal_reward_rate'] = skip_update_equal_rate
+                            metrics['state_group/skip_update_product'] = skip_update_product
+                            metrics['training/skipped_update'] = float(skip_policy_update)
+                        elif self.config.algorithm.adv_estimator == AdvantageEstimator.VinePPO:
+                            skip_policy_update = bool(
+                                float(batch.meta_info.get('vineppo/all_zero_advantage', 0.0) or 0.0)
+                            )
+                            metrics['training/skipped_update'] = float(skip_policy_update)
+                        else:
+                            metrics['training/skipped_update'] = 0.0
 
                     # update critic
-                    if self.use_critic:
+                    if self.use_critic and not skip_policy_update:
                         with _timer("update_critic", timing_raw):
                             critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info["metrics"])
                         metrics.update(critic_output_metrics)
 
                     # implement critic warmup
-                    if self.config.trainer.critic_warmup <= self.global_steps:
+                    if (not skip_policy_update) and self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
                         with _timer("update_actor", timing_raw):
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
+                            # Ensure loss_mask is present when multi_turn is True (vllm rollout
+                            # does not produce loss_mask; fall back to attention_mask)
+                            if batch.meta_info["multi_turn"] and "loss_mask" not in batch.batch:
+                                batch.batch["loss_mask"] = batch.batch["attention_mask"]
+                            # VPR: exclude rows that should not contribute gradients. This includes
+                            # divisibility-padding duplicates and, for state-group rollout, candidate groups
+                            # whose rewards are all identical. Their advantages and response masks are already
+                            # zeroed; loss_mask is handled separately because multi-turn actor loss falls back
+                            # to attention_mask when loss_mask is absent from rollout.
+                            if self.config.algorithm.adv_estimator in {'dapo', 'vpr', 'turn_level_ppo', 'vineppo'} and "loss_mask" in batch.batch:
+                                _skip_loss = None
+                                if self.config.algorithm.adv_estimator == 'dapo' and "dapo_skip_loss" in batch.non_tensor_batch:
+                                    _skip_loss = np.asarray(batch.non_tensor_batch["dapo_skip_loss"], dtype=bool)
+                                elif self.config.algorithm.adv_estimator == 'vpr' and "vpr_skip_loss" in batch.non_tensor_batch:
+                                    _skip_loss = np.asarray(batch.non_tensor_batch["vpr_skip_loss"], dtype=bool)
+                                elif self.config.algorithm.adv_estimator == 'vineppo' and "vineppo_skip_loss" in batch.non_tensor_batch:
+                                    _skip_loss = np.asarray(batch.non_tensor_batch["vineppo_skip_loss"], dtype=bool)
+                                elif "is_padding" in batch.non_tensor_batch:
+                                    _skip_loss = np.asarray(batch.non_tensor_batch["is_padding"], dtype=bool)
+                                if _skip_loss is not None:
+                                    _skip = torch.tensor(
+                                        _skip_loss, dtype=torch.bool, device=batch.batch["loss_mask"].device)
+                                    if _skip.any():
+                                        batch.batch["loss_mask"] = batch.batch["loss_mask"].clone()
+                                        batch.batch["loss_mask"][_skip] = 0
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)

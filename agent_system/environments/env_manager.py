@@ -24,6 +24,24 @@ from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
 from omegaconf import OmegaConf
 
+
+def select_agentic_prompt_template(
+    config,
+    action_tag_template,
+    boxed_template,
+    legacy_template,
+):
+    if not config.env.agentic_eval.native_action_protocol:
+        return legacy_template
+
+    action_format = config.env.agentic_eval.get("action_format", "action_tag")
+    if action_format == "action_tag":
+        return action_tag_template
+    if action_format == "boxed":
+        return boxed_template
+    raise ValueError(f"Unsupported agentic action format: {action_format!r}")
+
+
 def parse_gamefile(infos):
     gamefile = []
     for info in infos:
@@ -193,12 +211,24 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             reformatted_admissible_actions = "\n ".join(f"'{s}'" for s in admissible_actions[i] if s != 'help')
 
             if init or self.config.env.history_length <= 0:
-                obs = ALFWORLD_TEMPLATE_NO_HIS.format(
+                template = select_agentic_prompt_template(
+                    self.config,
+                    ALFWORLD_NATIVE_ACTION_TEMPLATE_NO_HIS,
+                    ALFWORLD_NATIVE_BOXED_TEMPLATE_NO_HIS,
+                    ALFWORLD_TEMPLATE_NO_HIS,
+                )
+                obs = template.format(
                     current_observation=text_obs[i],
                     admissible_actions=reformatted_admissible_actions
                 )
             else:
-                obs = ALFWORLD_TEMPLATE.format(
+                template = select_agentic_prompt_template(
+                    self.config,
+                    ALFWORLD_NATIVE_ACTION_TEMPLATE,
+                    ALFWORLD_NATIVE_BOXED_TEMPLATE,
+                    ALFWORLD_TEMPLATE,
+                )
+                obs = template.format(
                     task_description=self.tasks[i],
                     step_count=len(self.memory[i]),
                     history_length=valid_lens[i],
@@ -390,6 +420,9 @@ class WebshopEnvironmentManager(EnvironmentManagerBase):
     def reset(self, kwargs) -> Dict[str, Any]:
         obs, infos = self.envs.reset()
         self.tasks = self.extract_task(obs)
+        self.available_actions = [
+            self.format_avail_actions(info['available_actions']) for info in infos
+        ]
         obs = self.format_obs(obs)
         # infos = [None] * self.envs.num_envs
         observations = {'text': self.build_text_obs(obs, infos, init=True), 
@@ -401,8 +434,11 @@ class WebshopEnvironmentManager(EnvironmentManagerBase):
         return observations, infos
 
     def step(self, text_actions: List[str]):
-        actions, valids = self.projection_f(text_actions)
+        actions, valids = self.projection_f(text_actions, self.available_actions)
         next_obs, rewards, dones, infos = self.envs.step(actions)
+        self.available_actions = [
+            self.format_avail_actions(info['available_actions']) for info in infos
+        ]
 
         next_obs = self.format_obs(next_obs)
 
@@ -478,13 +514,25 @@ class WebshopEnvironmentManager(EnvironmentManagerBase):
             reformatted_available_actions = "\n".join(f"'{s}'," for s in available_actions)
 
             if init or self.config.env.history_length <= 0:
-                obs = WEBSHOP_TEMPLATE_NO_HIS.format(
+                template = select_agentic_prompt_template(
+                    self.config,
+                    WEBSHOP_NATIVE_ACTION_TEMPLATE_NO_HIS,
+                    WEBSHOP_NATIVE_BOXED_TEMPLATE_NO_HIS,
+                    WEBSHOP_TEMPLATE_NO_HIS,
+                )
+                obs = template.format(
                     task_description=self.tasks[i],
                     current_observation=text_obs[i],
                     available_actions=reformatted_available_actions
                 )
             else:
-                obs = WEBSHOP_TEMPLATE.format(
+                template = select_agentic_prompt_template(
+                    self.config,
+                    WEBSHOP_NATIVE_ACTION_TEMPLATE,
+                    WEBSHOP_NATIVE_BOXED_TEMPLATE,
+                    WEBSHOP_TEMPLATE,
+                )
+                obs = template.format(
                     task_description=self.tasks[i],
                     step_count=len(self.memory[i]),
                     history_length=valid_lens[i],
@@ -495,7 +543,13 @@ class WebshopEnvironmentManager(EnvironmentManagerBase):
                 )
                 if len(obs) > 13000:
                     print(f"Warning len(obs)={len(obs)} is too long")
-                    obs = WEBSHOP_TEMPLATE_NO_HIS.format(
+                    fallback_template = select_agentic_prompt_template(
+                        self.config,
+                        WEBSHOP_NATIVE_ACTION_TEMPLATE_NO_HIS,
+                        WEBSHOP_NATIVE_BOXED_TEMPLATE_NO_HIS,
+                        WEBSHOP_TEMPLATE_NO_HIS,
+                    )
+                    obs = fallback_template.format(
                         task_description=self.tasks[i],
                         current_observation=text_obs[i],
                         available_actions=reformatted_available_actions
@@ -606,10 +660,134 @@ def make_envs(config):
     # check if config.env.rollout.n is an integer
     if not isinstance(config.env.rollout.n, int):
         raise ValueError("config.env.rollout.n should be an integer")
+    rollout_mode = getattr(config.env.rollout, "mode", "vanilla")
     group_n = config.env.rollout.n if config.env.rollout.n > 0 else 1
+    if rollout_mode == "state_group":
+        group_n = 1
     resources_per_worker = OmegaConf.to_container(config.env.resources_per_worker, resolve=True)
 
-    if "search" in config.env.env_name.lower():
+    mixed_env_name = config.env.env_name.lower()
+    if mixed_env_name in {"tau_vpr", "tau_outcome"}:
+        expected_mode = "state_group" if mixed_env_name == "tau_vpr" else "vanilla"
+        if rollout_mode != expected_mode:
+            raise ValueError(f"{mixed_env_name} requires env.rollout.mode={expected_mode}")
+        if bool(config.env.tau.user_reasoning_enabled):
+            raise ValueError(
+                "Tau training and evaluation require "
+                "env.tau.user_reasoning_enabled=false"
+            )
+        from agent_system.environments.env_package.tau_bench.envs import (
+            build_tau_bench_envs,
+            load_qualification_manifest,
+            validate_tau_runtime_protocol,
+        )
+        from agent_system.environments.env_package.tau_bench.manager import (
+            TauBenchEnvironmentManager,
+            tau_projection,
+        )
+
+        qualification = load_qualification_manifest(
+            config.env.tau.qualification_manifest,
+            minimum_airline=int(config.env.tau.minimum_stable_airline),
+            minimum_retail=int(config.env.tau.minimum_stable_retail),
+        )
+        validate_tau_runtime_protocol(
+            qualification,
+            config.env.tau,
+            require_oracle=mixed_env_name == "tau_vpr",
+        )
+        train_counts = OmegaConf.to_container(
+            config.env.tau.trajectory_counts, resolve=True
+        )
+        validation_counts = OmegaConf.to_container(
+            config.env.tau.validation_counts, resolve=True
+        )
+        if sum(int(value) for value in train_counts.values()) != int(config.data.train_batch_size):
+            raise ValueError("Tau training counts must sum to data.train_batch_size")
+        if sum(int(value) for value in validation_counts.values()) != int(config.data.val_batch_size):
+            raise ValueError("Tau validation counts must sum to data.val_batch_size")
+
+        oracle_actor = None
+        val_only = bool(config.trainer.get("val_only", False))
+        if mixed_env_name == "tau_vpr" and not val_only:
+            from agent_system.environments.env_package.tau_bench.oracle import (
+                OpenRouterOracleActor,
+            )
+
+            oracle_actor = OpenRouterOracleActor.remote(
+                model=str(config.env.tau.oracle.model),
+                api_key_env=str(config.env.tau.oracle.api_key_env),
+                samples=int(config.env.tau.oracle.samples),
+                reasoning_effort=str(config.env.tau.oracle.reasoning_effort),
+                max_tokens=int(config.env.tau.oracle.max_tokens),
+                cache_path=str(config.env.tau.oracle.cache_path),
+                timeout_seconds=float(config.env.tau.oracle.timeout_seconds),
+                max_retries=int(config.env.tau.oracle.max_retries),
+                max_concurrent_requests=int(config.env.tau.oracle.max_concurrent_requests),
+            )
+        _envs = None
+        if not val_only:
+            _envs = build_tau_bench_envs(
+                seed=config.env.seed,
+                counts=train_counts,
+                env_config=config.env,
+                is_train=True,
+                group_n=group_n,
+                oracle_actor=oracle_actor,
+            )
+        _val_envs = build_tau_bench_envs(
+            seed=int(config.env.tau.eval_seed),
+            counts=validation_counts,
+            env_config=config.env,
+            is_train=False,
+            group_n=1,
+            oracle_actor=None,
+        )
+        envs = None if val_only else TauBenchEnvironmentManager(_envs, tau_projection, config)
+        val_envs = TauBenchEnvironmentManager(_val_envs, tau_projection, config)
+        return envs, val_envs
+    elif mixed_env_name in {"dapo_vpr_mixed", "dapo_games_non_vpr_mixed"}:
+        expected_mode = (
+            "state_group" if mixed_env_name == "dapo_vpr_mixed" else "vanilla"
+        )
+        if rollout_mode != expected_mode:
+            raise ValueError(
+                f"{mixed_env_name} requires env.rollout.mode={expected_mode}"
+            )
+        from agent_system.environments.env_package.vpr_games.mixed import (
+            MixedVPRManager,
+            build_mixed_vpr_envs,
+            mixed_vpr_projection,
+        )
+
+        train_counts = OmegaConf.to_container(
+            config.env.mixed.trajectory_counts, resolve=True
+        )
+        validation_counts = OmegaConf.to_container(
+            config.env.mixed.validation_counts, resolve=True
+        )
+        if sum(int(value) for value in train_counts.values()) != int(config.data.train_batch_size):
+            raise ValueError("mixed training counts must sum to data.train_batch_size")
+        if sum(int(value) for value in validation_counts.values()) != int(config.data.val_batch_size):
+            raise ValueError("mixed validation counts must sum to data.val_batch_size")
+        _envs = build_mixed_vpr_envs(
+            seed=config.env.seed,
+            counts=train_counts,
+            env_config=config.env,
+            is_train=True,
+            group_n=group_n,
+        )
+        _val_envs = build_mixed_vpr_envs(
+            seed=config.env.seed + 1000,
+            counts=validation_counts,
+            env_config=config.env,
+            is_train=False,
+            group_n=1,
+        )
+        envs = MixedVPRManager(_envs, mixed_vpr_projection, config)
+        val_envs = MixedVPRManager(_val_envs, mixed_vpr_projection, config)
+        return envs, val_envs
+    elif "search" in config.env.env_name.lower():
         from agent_system.environments.env_package.search import build_search_envs, search_projection
         _envs = build_search_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, is_train=True, env_config=config.env)
         _val_envs = build_search_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, is_train=False, env_config=config.env)
@@ -638,13 +816,33 @@ def make_envs(config):
 
         env_kwargs = {
             'eval_dataset': config.env.alfworld.eval_dataset, # 'eval_in_distribution' or 'eval_out_of_distribution'
+            'deterministic_eval': config.env.alfworld.get('deterministic_eval', False),
         }
-        _envs = build_alfworld_envs(alf_config_path, config.env.seed, config.data.train_batch_size, group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
+        val_only = config.trainer.get('val_only', False)
+        _envs = None
+        if not val_only:
+            _envs = build_alfworld_envs(alf_config_path, config.env.seed, config.data.train_batch_size, group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
         _val_envs = build_alfworld_envs(alf_config_path, config.env.seed + 1000, config.data.val_batch_size, 1, is_train=False, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
         
-        projection_f = partial(alfworld_projection)
-        envs = AlfWorldEnvironmentManager(_envs, projection_f, config)
+        projection_f = partial(
+            alfworld_projection,
+            native_action_protocol=config.env.agentic_eval.native_action_protocol,
+        )
+        envs = None if val_only else AlfWorldEnvironmentManager(_envs, projection_f, config)
         val_envs = AlfWorldEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "vpr_sokoban" in config.env.env_name.lower():
+        from agent_system.environments.env_package.vpr_games.sokoban.envs import build_sokoban_envs
+        from agent_system.environments.env_package.vpr_games.sokoban.manager import (
+            SokobanEnvironmentManager as VPRSokobanEnvironmentManager,
+            sokoban_projection as vpr_sokoban_projection,
+        )
+        _envs = build_sokoban_envs(seed=config.env.seed, env_num=config.data.train_batch_size,
+                                    group_n=group_n, is_train=True, env_config=config.env)
+        _val_envs = build_sokoban_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size,
+                                        group_n=1, is_train=False, env_config=config.env)
+        envs = VPRSokobanEnvironmentManager(_envs, partial(vpr_sokoban_projection), config)
+        val_envs = VPRSokobanEnvironmentManager(_val_envs, partial(vpr_sokoban_projection), config)
         return envs, val_envs
     elif "sokoban" in config.env.env_name.lower():
         from agent_system.environments.env_package.sokoban import build_sokoban_envs, sokoban_projection
@@ -663,27 +861,39 @@ def make_envs(config):
         return envs, val_envs
     elif "webshop" in config.env.env_name.lower():
         from agent_system.environments.env_package.webshop import build_webshop_envs, webshop_projection
+        data_dir = config.env.webshop.get('data_dir')
+        if not data_dir:
+            data_dir = os.path.join(os.path.dirname(__file__), 'env_package/webshop/webshop/data')
         if config.env.webshop.use_small:
-            file_path = os.path.join(os.path.dirname(__file__), 'env_package/webshop/webshop/data/items_shuffle_1000.json')
-            attr_path = os.path.join(os.path.dirname(__file__), 'env_package/webshop/webshop/data/items_ins_v2_1000.json')
+            file_path = os.path.join(data_dir, 'items_shuffle_1000.json')
+            attr_path = os.path.join(data_dir, 'items_ins_v2_1000.json')
         else:
-            file_path = os.path.join(os.path.dirname(__file__), 'env_package/webshop/webshop/data/items_shuffle.json')
-            attr_path = os.path.join(os.path.dirname(__file__), 'env_package/webshop/webshop/data/items_ins_v2.json')
+            file_path = os.path.join(data_dir, 'items_shuffle.json')
+            attr_path = os.path.join(data_dir, 'items_ins_v2.json')
         env_kwargs = {
                     'observation_mode': 'text', 
                     'num_products': None, 
                     'human_goals': config.env.webshop.human_goals,
                     'file_path': file_path,
-                    'attr_path': attr_path
+                    'attr_path': attr_path,
+                    'deterministic_eval': config.env.webshop.get('deterministic_eval', False),
+                    'shared_server': config.env.webshop.get('shared_server', False),
                     }
-        _envs = build_webshop_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
+        val_only = config.trainer.get('val_only', False)
+        _envs = None
+        if not val_only:
+            _envs = build_webshop_envs(seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
         _val_envs = build_webshop_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size, group_n=1, is_train=False, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
 
-        projection_f = partial(webshop_projection)
-        envs = WebshopEnvironmentManager(_envs, projection_f, config)
+        projection_f = partial(
+            webshop_projection,
+            native_action_protocol=config.env.agentic_eval.native_action_protocol,
+        )
+        envs = None if val_only else WebshopEnvironmentManager(_envs, projection_f, config)
         val_envs = WebshopEnvironmentManager(_val_envs, projection_f, config)
         import time
-        time.sleep((config.data.train_batch_size * group_n + config.data.val_batch_size) * 0.1) # wait for the envs to be ready
+        train_env_count = 0 if val_only else config.data.train_batch_size * group_n
+        time.sleep((train_env_count + config.data.val_batch_size) * 0.1) # wait for the envs to be ready
         return envs, val_envs
     elif "appworld" in config.env.env_name.lower():
         from agent_system.environments.env_package.appworld import build_appworld_envs, appworld_projection
@@ -693,6 +903,42 @@ def make_envs(config):
         projection_f = partial(appworld_projection)
         envs = AppWorldEnvironmentManager(_envs, projection_f, config)
         val_envs = AppWorldEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "vpr_tictactoe" in config.env.env_name.lower():
+        from agent_system.environments.env_package.vpr_games.tictactoe.envs import build_tictactoe_envs
+        from agent_system.environments.env_package.vpr_games.tictactoe.manager import (
+            TicTacToeEnvironmentManager, tictactoe_projection,
+        )
+        _envs = build_tictactoe_envs(seed=config.env.seed, env_num=config.data.train_batch_size,
+                                      group_n=group_n, is_train=True, env_config=config.env)
+        _val_envs = build_tictactoe_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size,
+                                          group_n=1, is_train=False, env_config=config.env)
+        envs = TicTacToeEnvironmentManager(_envs, partial(tictactoe_projection), config)
+        val_envs = TicTacToeEnvironmentManager(_val_envs, partial(tictactoe_projection), config)
+        return envs, val_envs
+    elif "vpr_sudoku" in config.env.env_name.lower():
+        from agent_system.environments.env_package.vpr_games.sudoku.envs import build_sudoku_envs
+        from agent_system.environments.env_package.vpr_games.sudoku.manager import (
+            SudokuEnvironmentManager, sudoku_projection,
+        )
+        _envs = build_sudoku_envs(seed=config.env.seed, env_num=config.data.train_batch_size,
+                                   group_n=group_n, is_train=True, env_config=config.env)
+        _val_envs = build_sudoku_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size,
+                                       group_n=1, is_train=False, env_config=config.env)
+        envs = SudokuEnvironmentManager(_envs, partial(sudoku_projection), config)
+        val_envs = SudokuEnvironmentManager(_val_envs, partial(sudoku_projection), config)
+        return envs, val_envs
+    elif "vpr_minesweeper" in config.env.env_name.lower():
+        from agent_system.environments.env_package.vpr_games.minesweeper.envs import build_minesweeper_envs
+        from agent_system.environments.env_package.vpr_games.minesweeper.manager import (
+            MinesweeperEnvironmentManager, minesweeper_projection,
+        )
+        _envs = build_minesweeper_envs(seed=config.env.seed, env_num=config.data.train_batch_size,
+                                        group_n=group_n, is_train=True, env_config=config.env)
+        _val_envs = build_minesweeper_envs(seed=config.env.seed + 1000, env_num=config.data.val_batch_size,
+                                            group_n=1, is_train=False, env_config=config.env)
+        envs = MinesweeperEnvironmentManager(_envs, partial(minesweeper_projection), config)
+        val_envs = MinesweeperEnvironmentManager(_val_envs, partial(minesweeper_projection), config)
         return envs, val_envs
     else:
         print("Environment not supported")

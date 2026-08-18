@@ -34,3 +34,19 @@ Now it's your turn to take an action.
 You should first reason step-by-step about the current situation. This reasoning process MUST be enclosed within <think> </think> tags. 
 Once you've finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags.
 """
+
+_ALFWORLD_THINK_TAG_REQUIREMENT = (
+    " This reasoning process MUST be enclosed within <think> </think> tags."
+)
+ALFWORLD_NATIVE_ACTION_TEMPLATE_NO_HIS = ALFWORLD_TEMPLATE_NO_HIS.replace(
+    _ALFWORLD_THINK_TAG_REQUIREMENT, ""
+)
+ALFWORLD_NATIVE_ACTION_TEMPLATE = ALFWORLD_TEMPLATE.replace(
+    _ALFWORLD_THINK_TAG_REQUIREMENT, ""
+)
+ALFWORLD_NATIVE_BOXED_TEMPLATE_NO_HIS = ALFWORLD_NATIVE_ACTION_TEMPLATE_NO_HIS.replace(
+    "<action> </action>", r"\boxed{{ACTION}}"
+)
+ALFWORLD_NATIVE_BOXED_TEMPLATE = ALFWORLD_NATIVE_ACTION_TEMPLATE.replace(
+    "<action> </action>", r"\boxed{{ACTION}}"
+)

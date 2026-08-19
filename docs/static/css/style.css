@@ -281,6 +281,53 @@ img {
     text-align: center;
 }
 
+.rollout-layout,
+.pattern-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+    gap: 28px;
+    align-items: center;
+    margin-top: 18px;
+}
+
+.rollout-layout {
+    align-items: start;
+    row-gap: 18px;
+}
+
+.pattern-layout {
+    align-items: start;
+    margin-top: 0;
+}
+
+.rollout-copy p:first-child,
+.pattern-layout > div > p:first-child {
+    margin-top: 0;
+}
+
+.rollout-figure,
+.analysis-figure {
+    margin: 0;
+}
+
+.rollout-figure img,
+.analysis-figure img {
+    display: block;
+    width: 100%;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.boundary-note {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: 14px 16px;
+    border-left: 4px solid var(--primary-color);
+    background: var(--soft-blue);
+    color: #334258;
+    text-align: left;
+}
+
 #method .method-image {
     margin-top: 0;
 }
@@ -332,6 +379,10 @@ table {
     min-width: 980px;
 }
 
+.compact-table {
+    min-width: 940px;
+}
+
 th,
 td {
     padding: 12px 14px;
@@ -351,6 +402,11 @@ tbody tr:first-child td {
 
 .highlight-row {
     background: var(--soft-blue);
+}
+
+.oracle-row {
+    background: #f4f6f9;
+    color: #536074;
 }
 
 .metric-grid {
@@ -418,7 +474,7 @@ tbody tr:first-child td {
 }
 
 .analysis-figure {
-    margin: 20px 0 0;
+    margin: 0;
 }
 
 .analysis-figure img {
@@ -779,6 +835,12 @@ footer a:hover {
 }
 
 @media (max-width: 920px) {
+    .rollout-layout,
+    .pattern-layout {
+        grid-template-columns: 1fr;
+        align-items: start;
+    }
+
     .analysis-grid {
         grid-template-columns: 1fr;
     }
@@ -840,9 +902,18 @@ footer a:hover {
     }
 
     .nav-global-links {
-        overflow-x: auto;
+        overflow-x: hidden;
         width: 100%;
-        justify-content: flex-start;
+        justify-content: space-between;
+        gap: 0;
+    }
+
+    .nav-global-content {
+        padding: 0 8px;
+    }
+
+    .nav-global-links a {
+        padding: 6px 7px;
     }
 
     .nav-dropdown {

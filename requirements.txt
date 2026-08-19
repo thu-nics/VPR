@@ -20,7 +20,7 @@ transformers<=4.57.3
 # Install vLLM through `pip install -e ".[vllm]"` so its Torch-compatible
 # wheel can be selected for the target CUDA platform.
 wandb
-packaging>=20.0
+packaging>=26.3
 uvicorn
 fastapi
 qwen-vl-utils[decord]

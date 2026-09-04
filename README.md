@@ -7,39 +7,78 @@
 
 This repository contains the implementation of **Verifiable Process Rewards
 (VPR)** on top of [verl-agent](https://github.com/langfengQ/verl-agent) and
-[veRL](https://github.com/volcengine/verl). VPR studies structured, long-horizon
-agentic reasoning tasks in which a task-grounded symbolic or algorithmic oracle
-can score intermediate actions.
+[veRL](https://github.com/volcengine/verl).
 
-The paper evaluates three oracle instantiations:
+## Overview
+
+<p align="center">
+  <img src="docs/assets/vpr-reward-designs.png" width="100%" alt="Comparison of outcome rewards, rollout-based process rewards, and VPR action-level process verification.">
+</p>
+<p align="center"><em>Outcome rewards supervise completed trajectories; rollout-based process rewards estimate intermediate values from additional continuations; VPR directly scores intermediate actions with a task-solving oracle.</em></p>
+
+Reinforcement learning from verifiable rewards can optimize objective task
+outcomes, but terminal-only feedback leaves a substantial credit-assignment
+problem in long-horizon interaction. Learned judges may be noisy or exploitable,
+while continuation-based value estimates require additional rollouts from
+intermediate states.
+
+VPR studies structured agentic reasoning problems that admit symbolic or
+algorithmic task-solving oracles. It repurposes each oracle as an **action-level
+process verifier**: oracle-preferred actions receive the highest reward, while
+other legal or invalid policy actions receive lower rewards.
+
+## Method
+
+We instantiate VPR with three types of task-grounded verifier:
 
 - **Sokoban:** breadth-first search identifies actions on a shortest solution path.
-- **Sudoku:** constraint reasoning distinguishes forced, MRV, legal, and invalid moves.
-- **Minesweeper:** posterior mine probabilities identify safe reveals, certain flags,
-  and minimum-risk guesses.
+- **Sudoku:** constraint structure distinguishes forced, MRV, legal non-oracle,
+  wrong, and invalid moves.
+- **Minesweeper:** posterior mine probabilities identify safe reveals, certain
+  flags, and minimum-risk guesses.
 
-## State-group rollout
+<p align="center">
+  <img src="docs/assets/vpr-oracle-instantiations.png" width="100%" alt="Search-based VPR for Sokoban, constraint-based VPR for Sudoku, and posterior-based VPR for Minesweeper.">
+</p>
+<p align="center"><em>Three VPR instantiations, in visual order: search-based Sokoban, constraint-based Sudoku, and posterior-based Minesweeper.</em></p>
 
-At every visited state, VPR samples `K=4` candidate responses from the current
-policy. Each response is parsed into an environment action and scored by the
-oracle. One uniformly sampled maximum-reward candidate is committed to advance
-the environment, while every informative, non-padding candidate can train the
-policy. Advantages are formed from within-state relative rewards and then
-whitened across valid candidates. Equal-reward groups are masked because they
-contain no preference signal.
+### State-group rollout and optimization
 
-Terminology used throughout the code and documentation:
+- **Oracle-guided state-group rollout.** At every visited state, the policy
+  independently samples four candidate responses. The constructed verifier
+  scores and ranks their parsed actions, and one uniformly sampled maximum-reward
+  candidate is committed to the environment. Best-of-four commit improves
+  exploration of promising states while inducing an oracle-guided shift in the
+  visited-state distribution.
+- **Locally normalized optimization.** The four same-state candidates form a
+  state group. Every informative, non-padding candidate can train the policy.
+  VPR first centers rewards within the group and then whitens across valid
+  candidates; equal-reward groups are skipped because they contain no local
+  preference signal.
 
-- **Initial task instance:** one reset environment and its initial prompt.
-- **Committed trajectory:** the single environment trajectory produced by VPR's
-  committed actions.
-- **State group:** the four candidates sampled from one intermediate state.
-- **Trajectory group:** the eight complete trajectories sampled by GRPO from one
-  initial task instance.
+<p align="center">
+  <img src="docs/assets/vpr-state-group-rollout.png" width="40%" alt="VPR state-group rollout and optimization with four same-state candidates and one committed environment action.">
+</p>
+<p align="center"><em>Candidate sampling and training are distinct from the single committed environment transition.</em></p>
 
-The maximum-reward commit improves exploration of promising successor states but
-also changes the visited-state distribution relative to ordinary policy rollout.
-`K=4` is the paper's practical exploration/selection-pressure trade-off.
+## Results
+
+| Method | Sokoban SR (%) | Sudoku SR (%) | Sudoku CR (%) | Minesweeper SR (%) | Minesweeper CR (%) |
+|:--|--:|--:|--:|--:|--:|
+| *Optimal* | *100.00 ± 0.00* | *100.00 ± 0.00* | *100.00 ± 0.00* | *78.60 ± 3.78* | *96.93 ± 0.77* |
+| Base | 5.20 ± 3.35 | 0.00 ± 0.00 | 4.10 ± 0.39 | 0.20 ± 0.45 | 71.04 ± 2.00 |
+| GRPO | 12.20 ± 1.10 | 29.00 ± 3.46 | 39.03 ± 3.44 | 4.20 ± 1.30 | 73.49 ± 2.04 |
+| VinePPO | 6.80 ± 1.30 | 0.00 ± 0.00 | 2.90 ± 0.44 | 3.00 ± 2.24 | 72.75 ± 1.59 |
+| **VPR (Ours)** | **28.40 ± 2.79** | **80.60 ± 4.16** | **84.22 ± 3.15** | **32.60 ± 5.03** | **85.76 ± 0.98** |
+
+<p align="center"><em>SR denotes success rate; CR denotes completion rate. Results are mean ± sample standard deviation over five runs of 100 games. Optimal directly executes the task oracle under the same environments and action budgets. Minesweeper still requires minimum-risk guesses in uncertain states.</em></p>
+
+- In controlled Qwen3-4B experiments, VPR outperforms GRPO and VinePPO on every
+  reported metric across Sokoban, Sudoku, and Minesweeper.
+- Mixed OOD experiments start from the same Qwen3-4B-Base checkpoint and hold
+  math-data exposure fixed. Math+VPR achieves the best average over seven
+  general-reasoning benchmarks and the strongest ALFWorld and WebShop results.
+- The OOD comparison does not claim equal total rollout compute.
 
 ## Installation
 
@@ -131,13 +170,22 @@ Evaluation launchers preserve protocol manifests, raw generations, source
 identity, and resumability under `runs/`. See
 [`examples/vpr_games/eval/README.md`](examples/vpr_games/eval/README.md).
 
-## Exploratory tau2-bench extension
+## Exploratory evaluation on τ²-bench
 
-The tau2-bench experiment uses a task-grounded expert reference policy with
-privileged task specification and reference-resolution guidance. Tool calls use
-canonical exact matching and natural-language actions use a semantic matcher.
-This is supervised feasibility evidence, not a general no-privilege conversion
-from arbitrary policies to process verifiers.
+When a compact symbolic oracle is unavailable, we explore whether a task-grounded
+expert reference policy can supply VPR-style action rewards at student-visited
+states. The reference policy receives privileged task specifications, evaluation
+criteria, and reference-resolution guidance. Tool actions use canonical exact
+matching; natural-language actions use a semantic matcher. The expert is used
+only during training.
+
+Under this protocol, VPR outperforms GRPO on held-out Airline and Retail tasks.
+
+**Evidence boundary.** Airline and Retail provide exploratory evidence that
+privileged expert guidance can supply useful action-level supervision, including
+on held-out tasks. Telecom is mixed, so this experiment does not establish
+uniform transfer to a new tool domain or a general reference-policy-to-verifier
+conversion.
 
 ```bash
 PYTHON=python bash examples/tau_bench/install_tau2.sh
@@ -145,7 +193,7 @@ export OPENROUTER_API_KEY=...
 MODEL_PATH=/path/to/Qwen3-8B bash examples/tau_bench/run_tau_vpr.sh
 ```
 
-Both trained tau2-bench variants are evaluated at step 100. See
+Both trained τ²-bench variants are evaluated at step 100. See
 [`examples/tau_bench/README.md`](examples/tau_bench/README.md) for the pinned
 source revision, qualification protocol, and evaluation procedure.
 
@@ -157,7 +205,7 @@ source revision, qualification protocol, and evaluation procedure.
 - `verl/trainer/config/vpr_*.yaml`: canonical game configurations.
 - `examples/vpr_games/`: data, launchers, smoke checks, and evaluation.
 - `examples/dapo_trainer/`: math and mixed-training launchers.
-- `examples/tau_bench/`: exploratory tau2-bench protocol.
+- `examples/tau_bench/`: exploratory τ²-bench protocol.
 - `tests/vpr_games/`, `tests/tau_bench/`: regression suites.
 
 ## Reproducibility notes
